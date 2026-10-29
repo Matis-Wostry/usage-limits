@@ -237,6 +237,20 @@ export const register: Register = (on, options) => {
     // From 50 to 69 columns the bars keep at most 65 % of the room they could take.
     const barWidth = hasWidth && columns <= 69 && columns >= 50 ? Math.round(fitWidth * 0.65) : fitWidth
 
+    // A long prompt leaves the band few rows (maxRows): a taller tree would scroll or be cut.
+    // Drop the extras one by one (debug line, reset line, vertical padding, border), then hide.
+    const contentRows = isTiny ? limits.length : 1
+    const hasRoom = typeof e.props.maxRows === 'number' && Number.isFinite(e.props.maxRows)
+    const rows = hasRoom ? e.props.maxRows : Infinity
+    const hasReset = showReset
+    const hasDebug = hasWidth && rows >= contentRows + 4 + (hasReset ? 1 : 0) + 1
+    const hasResetLine = hasReset && rows >= contentRows + 4 + 1
+    const hasPadding = rows >= contentRows + 4
+    const hasBorder = rows >= contentRows + 2
+    if (rows < contentRows) {
+      return next(e)
+    }
+
     const now = await $.clock.now()
     const ui = $.ui.resolve(e)
     const { Box, Text } = ui
@@ -256,9 +270,9 @@ export const register: Register = (on, options) => {
           gap={isStacked ? 2 : 3}
           flexDirection={isTiny ? 'column' : 'row'}
           paddingX={2}
-          paddingY={1}
+          paddingY={hasPadding ? 1 : 0}
           alignItems="center"
-          borderStyle="round"
+          borderStyle={hasBorder ? 'round' : undefined}
           borderColor={`${accent}40`}
           backgroundColor={`${accent}1F`}
         >
@@ -298,10 +312,12 @@ export const register: Register = (on, options) => {
             )
           })}
         </Box>
-        <Box justifyContent="space-between" flexDirection={isStacked ? 'column' : 'row'} paddingX={2}>
-          {showReset && resets ? <Text dimColor size="footnote">Reset : {resets}</Text> : null}
-        </Box>
-        {hasWidth ? (
+        {hasResetLine && resets ? (
+          <Box justifyContent="space-between" flexDirection={isStacked ? 'column' : 'row'} paddingX={2}>
+            <Text dimColor size="footnote">Reset : {resets}</Text>
+          </Box>
+        ) : null}
+        {hasDebug ? (
           <Box paddingX={2}>
             <Text dimColor size="footnote">{columns} col · {mode}</Text>
           </Box>
