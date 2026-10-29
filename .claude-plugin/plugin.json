@@ -1,0 +1,64 @@
+{
+  "name": "usage-limits",
+  "version": "0.10.0",
+  "description": "Shows the 5-hour and weekly usage limits as a band above the prompt, with a pace arrow.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "windows": {
+      "type": "string",
+      "title": "Windows shown",
+      "description": "Which limits the band shows: both, five_hour or seven_day.",
+      "options": ["both", "five_hour", "seven_day"],
+      "default": "both"
+    },
+    "warnAt": {
+      "type": "number",
+      "title": "Alert threshold (%)",
+      "description": "The bar turns red and a toast shows from this usage.",
+      "default": 90,
+      "min": 1,
+      "max": 100
+    },
+    "cautionAt": {
+      "type": "number",
+      "title": "Caution threshold (%)",
+      "description": "The bar turns orange from this usage.",
+      "default": 70,
+      "min": 1,
+      "max": 100
+    },
+    "paceMargin": {
+      "type": "number",
+      "title": "Neutral zone (points)",
+      "description": "Gap between usage and elapsed time under which the arrow stays neutral.",
+      "default": 8,
+      "min": 0,
+      "max": 50
+    },
+    "showDelta": {
+      "type": "boolean",
+      "title": "Show the gap in points",
+      "description": "Writes the pace gap beside the arrow, like ↑ +50.",
+      "default": false
+    },
+    "showReset": {
+      "type": "boolean",
+      "title": "Show the time left",
+      "description": "Writes the time before each window resets.",
+      "default": true
+    },
+    "layout": {
+      "type": "string",
+      "title": "Layout",
+      "description": "auto adapts to the width; wide, medium or narrow forces one.",
+      "options": ["auto", "wide", "medium", "narrow"],
+      "default": "auto"
+    },
+    "isCompact": {
+      "type": "boolean",
+      "title": "Compact style",
+      "description": "Drops the bar: only the label, the percentage and the arrow.",
+      "default": false
+    }
+  }
+}
