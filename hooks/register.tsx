@@ -19,11 +19,11 @@ const WINDOW_MS: Record<string, number> = {
   seven_day: 7 * 24 * 3600_000,
 }
 
-const BAR_WIDTH = 12
-
-const bar = (percent: number) => {
-  const filled = Math.min(BAR_WIDTH, Math.round((percent / 100) * BAR_WIDTH))
-  return { filled: '━'.repeat(filled), empty: '╌'.repeat(BAR_WIDTH - filled) }
+// The terminal's bar, one cell per step: used share, free share, and a tick where the clock stands.
+const bar = (percent: number, elapsed: number | null, cells: number) => {
+  const filled = Math.min(cells, Math.round((percent / 100) * cells))
+  const tick = elapsed === null ? -1 : Math.min(cells - 1, Math.floor((elapsed / 100) * cells))
+  return Array.from({ length: cells }, (_, i) => ({ isTick: i === tick, isFilled: i < filled }))
 }
 
 type Verdict = 'push' | 'steady' | 'slow' | 'limit'
@@ -243,7 +243,6 @@ export const register: Register = (on, options) => {
     const hasRoom = typeof e.props.maxRows === 'number' && Number.isFinite(e.props.maxRows)
     const rows = hasRoom ? e.props.maxRows : Infinity
     const hasReset = showReset
-    const hasDebug = hasWidth && rows >= contentRows + 4 + (hasReset ? 1 : 0) + 1
     const hasResetLine = hasReset && rows >= contentRows + 4 + 1
     const hasPadding = rows >= contentRows + 4
     const hasBorder = rows >= contentRows + 2
@@ -254,8 +253,11 @@ export const register: Register = (on, options) => {
     const now = await $.clock.now()
     const ui = $.ui.resolve(e)
     const { Box, Text } = ui
-    // The terminal has no Svg: it keeps a text icon and the line bar.
-    const Svg = 'Svg' in ui ? ui.Svg : null
+    // The terminal has no Svg: it keeps a text icon and the line bar, with no tinted card
+    // (a terminal fills any background solid, which hides the coloured text).
+    const isTerminal = e.surface === 'terminal'
+    const Svg = !isTerminal && 'Svg' in ui ? ui.Svg : null
+    const cellCount = mode === 'wide' ? 24 : mode === 'medium' ? 16 : 8
 
     const verdict = verdictOf(limits, now)
     const { label, accent, glyph } = VERDICTS[verdict]
@@ -273,8 +275,8 @@ export const register: Register = (on, options) => {
           paddingY={hasPadding ? 1 : 0}
           alignItems="center"
           borderStyle={hasBorder ? 'round' : undefined}
-          borderColor={`${accent}40`}
-          backgroundColor={`${accent}1F`}
+          borderColor={Svg ? `${accent}40` : accent}
+          backgroundColor={Svg ? `${accent}1F` : undefined}
         >
           {isTiny ? null : <Box gap={2} alignItems="center">
             {Svg ? (
@@ -282,12 +284,12 @@ export const register: Register = (on, options) => {
             ) : (
               <Text color={accent} bold>{glyph}</Text>
             )}
-            {isStacked ? null : <Text weight="semibold">{label}</Text>}
+            {isStacked ? null : <Text weight="semibold" color={Svg ? undefined : accent}>{label}</Text>}
           </Box>}
           {isTiny ? null : <Box flexGrow={1} />}
           {limits.map(l => {
-            const { filled, empty } = bar(l.percentUsed)
             const p = pace(l, now)
+            const cells = Svg ? [] : bar(l.percentUsed, p ? p.elapsed : null, cellCount)
 
             return (
               <Box key={l.kind} gap={isStacked ? 1 : 2} alignItems="center" justifyContent={isTiny ? 'space-between' : 'flex-start'}>
@@ -302,11 +304,14 @@ export const register: Register = (on, options) => {
                   />
                 ) : (
                   <Text>
-                    <Text color={accent}>{filled}</Text>
-                    <Text color="subtle">{empty}</Text>
+                    {cells.map((c, i) => (
+                      <Text key={i} color={c.isTick ? undefined : c.isFilled ? accent : 'subtle'} bold={c.isTick}>
+                        {c.isTick ? '┃' : c.isFilled ? '━' : '╌'}
+                      </Text>
+                    ))}
                   </Text>
                 )}
-                {isStacked ? <Box minWidth={5} justifyContent="flex-end"><Text weight="bold">{Math.round(l.percentUsed)} %</Text></Box> : <Text weight="bold">{Math.round(l.percentUsed)} %</Text>}
+                {isStacked ? <Box minWidth={5} justifyContent="flex-end"><Text weight="bold" color={isTerminal ? accent : undefined}>{Math.round(l.percentUsed)} %</Text></Box> : <Text weight="bold" color={isTerminal ? accent : undefined}>{Math.round(l.percentUsed)} %</Text>}
                 {p && showDelta ? <Text color={accent} size="footnote">{p.delta >= 0 ? '+' : ''}{p.delta}</Text> : null}
               </Box>
             )
@@ -315,11 +320,6 @@ export const register: Register = (on, options) => {
         {hasResetLine && resets ? (
           <Box justifyContent="space-between" flexDirection={isStacked ? 'column' : 'row'} paddingX={2}>
             <Text dimColor size="footnote">Reset : {resets}</Text>
-          </Box>
-        ) : null}
-        {hasDebug ? (
-          <Box paddingX={2}>
-            <Text dimColor size="footnote">{columns} col · {mode}</Text>
           </Box>
         ) : null}
       </Box>
