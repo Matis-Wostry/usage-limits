@@ -99,6 +99,7 @@ export const register: Register = (on, options) => {
   const paceMargin = Number(options.paceMargin)
   const showDelta = options.showDelta === true
   const showReset = options.showReset === true
+  const showPaceMark = options.showPaceMark !== false
   const isCompact = options.isCompact === true
   const layout = String(options.layout)
 
@@ -170,9 +171,54 @@ export const register: Register = (on, options) => {
       name: 'limites-masquer',
       description: 'Hide the usage limits band (/limites brings it back)',
     })
+    await $.command.register({
+      name: 'usage-limits-config',
+      description: 'Show or change the usage-limits settings',
+      argumentHint: '[réglage=valeur]',
+    })
     const { rateLimits } = await $.session.usage()
     await update($, limitsAtom, () => [...rateLimits])
     return next(e)
+  })
+
+  // The mod's own settings, apart from /config: no argument lists them, `name=value` changes one.
+  on('command.run', { command: 'usage-limits-config' }, async ($, e) => {
+    const prefix = 'usage-limits.'
+    const rows = (await $.config.list()).filter(r => r.key.startsWith(prefix))
+    const describe = (r: (typeof rows)[number]) =>
+      `${r.key.slice(prefix.length)} = ${String(r.value)}${r.options ? ` (${r.options.join(' | ')})` : ''}`
+    const args = e.args.trim()
+
+    if (!args) {
+      return {
+        text: [
+          'Réglages de usage-limits (change avec /usage-limits-config réglage=valeur) :',
+          ...rows.map(describe),
+        ].join('\n'),
+      }
+    }
+
+    const at = args.indexOf('=')
+    const name = (at < 0 ? args : args.slice(0, at)).trim()
+    const raw = at < 0 ? '' : args.slice(at + 1).trim()
+    const row = rows.find(r => r.key === prefix + name)
+    if (!row) return { text: `Réglage inconnu : ${name}\n${rows.map(describe).join('\n')}` }
+    if (at < 0) return { text: describe(row) }
+
+    let value: boolean | number | string = raw
+    if (row.kind === 'boolean') {
+      if (/^(true|on|oui|1)$/i.test(raw)) value = true
+      else if (/^(false|off|non|0)$/i.test(raw)) value = false
+      else return { text: `${name} attend true ou false.` }
+    } else if (row.kind === 'number') {
+      value = Number(raw)
+      if (raw === '' || !Number.isFinite(value)) return { text: `${name} attend un nombre.` }
+    } else if (row.options && !row.options.includes(raw)) {
+      return { text: `${name} attend : ${row.options.join(' | ')}` }
+    }
+
+    const result = await $.config.set({ key: row.key, value })
+    return { text: result.deny ? `Refusé : ${result.deny}` : `${name} = ${String(value)}` }
   })
 
   on('command.run', { command: 'limites-masquer' }, async $ => {
@@ -289,14 +335,15 @@ export const register: Register = (on, options) => {
           {isTiny ? null : <Box flexGrow={1} />}
           {limits.map(l => {
             const p = pace(l, now)
-            const cells = Svg ? [] : bar(l.percentUsed, p ? p.elapsed : null, cellCount)
+            const markAt = showPaceMark && p ? p.elapsed : null
+            const cells = Svg ? [] : bar(l.percentUsed, markAt, cellCount)
 
             return (
               <Box key={l.kind} gap={isStacked ? 1 : 2} alignItems="center" justifyContent={isTiny ? 'space-between' : 'flex-start'}>
                 <Text dimColor size="footnote">{LABELS[l.kind] ?? l.kind}</Text>
                 {isCompact ? null : Svg ? (
                   <Svg
-                    source={barSvg(l.percentUsed, accent, p ? p.elapsed : null, barWidth, tipFor(l, p, now))}
+                    source={barSvg(l.percentUsed, accent, markAt, barWidth, tipFor(l, p, now))}
                     alt=""
                     isInteractive
                     width={barWidth}

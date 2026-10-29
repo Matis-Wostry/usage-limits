@@ -49,7 +49,8 @@ La bande s'affiche dans **VS Code**. Elle n'apparaît pas dans l'onglet Code de 
 
 - `/limites` : détail en texte, et fait revenir la bande si elle est masquée.
 - `/limites-masquer` : masque la bande.
+- `/usage-limits-config` : liste les réglages du mod ; `/usage-limits-config showPaceMark=false` en change un.
 
 ## Réglages
 
-Dans `/config` : fenêtres affichées, seuil d'alerte (90 %), seuil d'attention (70 %), zone neutre (8 points), écart en points, temps restant, style compact.
+Avec `/usage-limits-config` (ou dans `/config`) : fenêtres affichées, seuil d'alerte (90 %), seuil d'attention (70 %), zone neutre (8 points), écart en points, repère du temps écoulé sur les barres (trait noir ou blanc, activé par défaut), temps restant, style compact.

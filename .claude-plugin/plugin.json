@@ -41,6 +41,12 @@
       "description": "Writes the pace gap beside the arrow, like ↑ +50.",
       "default": false
     },
+    "showPaceMark": {
+      "type": "boolean",
+      "title": "Show the time mark",
+      "description": "Draws the tick on each bar where the clock stands in the window. Off: the bar shows only the usage.",
+      "default": true
+    },
     "showReset": {
       "type": "boolean",
       "title": "Show the time left",

@@ -1,5 +1,14 @@
 {
   "name": "usage-limits",
   "owner": { "name": "Matis" },
-  "plugins": [{ "name": "usage-limits", "source": "./" }]
+  "metadata": {
+    "description": "Un mod Claude Code qui affiche tes limites d'utilisation (5 h et 7 jours) au-dessus du champ de saisie, avec un verdict de rythme."
+  },
+  "plugins": [
+    {
+      "name": "usage-limits",
+      "source": "./",
+      "description": "Bande au-dessus du champ de saisie : consommation des limites de 5 h et de 7 jours, avec un verdict de rythme (pousser, rythme normal, ralentir, limite proche)."
+    }
+  ]
 }
