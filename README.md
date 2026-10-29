@@ -21,9 +21,14 @@ Dans une session Claude Code (terminal) :
 
 Réponds `y` pour ajouter le marketplace, puis choisis la portée (utilisateur pour l'avoir partout). Dans l'application bureau, où `/plugin` ne fonctionne pas : clique sur **+** à côté du champ de saisie, **Plugins**, **Add marketplace** avec `Matis-Wostry/usage-limits`, puis **Add plugin**.
 
-### Sans GitHub (zip ou dossier)
+### Sans le marketplace (dossier local)
 
-1. Télécharge le dépôt (bouton **Code**, puis **Download ZIP**) et dézippe-le dans un dossier à toi, par exemple `D:\mods\usage-limits`.
+1. Récupère le dépôt dans un dossier à toi, par exemple :
+
+   ```
+   git clone https://github.com/Matis-Wostry/usage-limits.git D:\mods\usage-limits
+   ```
+
 2. Au choix :
    - **Un essai** : lance `claude --plugin-dir "D:\mods\usage-limits"`.
    - **En permanence** : dans ton `settings.json` utilisateur (`~/.claude/settings.json`, ou `%USERPROFILE%\.claude\settings.json` sous Windows), ajoute :
