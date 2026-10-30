@@ -51,6 +51,47 @@ La bande s'affiche dans **VS Code**. Elle n'apparaît pas dans l'onglet Code de 
 - `/limites-masquer` : masque la bande.
 - `/usage-limits-config` : liste les réglages du mod ; `/usage-limits-config showPaceMark=false` en change un.
 
-## Réglages
+## Tokens
 
-Avec `/usage-limits-config` (ou dans `/config`) : fenêtres affichées, seuil d'alerte (90 %), seuil d'attention (70 %), zone neutre (8 points), écart en points, repère du temps écoulé sur les barres (trait noir ou blanc, activé par défaut), temps restant, style compact.
+Sous la bande, une ligne donne les tokens du dernier tour (entrée, sortie), le total de la session (sous-agents compris) et le remplissage du contexte. L'entrée compte aussi la part servie par le cache ; `/limites` détaille cette part. Les totaux partent du chargement du mod et repartent à zéro après `/clear`.
+
+## Fable
+
+Quand Claude Code remonte une limite propre à un modèle (par exemple `seven_day_fable`), sa barre n'apparaît que si ce modèle est sélectionné (`/model`), et remplace alors la barre « 7 j ». Sans limite Fable remontée, la barre « 7 j » reste.
+
+## Configuration
+
+Trois façons de régler le mod :
+
+- `/usage-limits-config` : liste les réglages et leur valeur actuelle.
+- `/usage-limits-config réglage=valeur` : en change un, par exemple `/usage-limits-config barHeight=10`. Pour les booléens, `true`/`false`, `on`/`off`, `oui`/`non` et `1`/`0` marchent tous.
+- `/config` : les mêmes réglages, dans le menu de Claude Code.
+
+### Paramètres
+
+| Paramètre | Valeurs | Défaut | Effet |
+|---|---|---|---|
+| `windows` | `both`, `five_hour`, `seven_day` | `both` | Les limites affichées : les deux, ou seulement la session de 5 h, ou seulement la semaine. |
+| `warnAt` | 1 à 100 (%) | `90` | Seuil d'alerte : à partir de là, la barre passe au rouge, le verdict devient « Limite proche » et une notification s'affiche. |
+| `cautionAt` | 1 à 100 (%) | `70` | Seuil d'attention : à partir de là, la barre passe à l'orange. |
+| `paceMargin` | 0 à 50 (points) | `8` | Zone neutre : tant que l'écart entre la consommation et le temps écoulé reste sous cette valeur, le rythme est « normal ». |
+| `showDelta` | `true`, `false` | `false` | Écrit l'écart en points à côté de chaque barre, par exemple `+12`. |
+| `showPaceMark` | `true`, `false` | `true` | Dessine sur chaque barre le trait qui marque le temps écoulé dans la fenêtre. |
+| `showReset` | `true`, `false` | `true` | Ajoute sous la bande la ligne « Reset : session … · semaine … ». |
+| `showTokens` | `true`, `false` | `true` | Ajoute sous la bande la ligne des tokens : dernier tour, session, contexte. |
+| `barHeight` | 2 à 20 (px) | `6` | Épaisseur des barres. Le terminal dessine ses barres en texte et ignore ce réglage. |
+| `bandPadding` | 0 à 3 (lignes) | `1` | Hauteur de la bande : marge au-dessus et au-dessous de son contenu. `0` la rend la plus basse possible. |
+| `layout` | `auto`, `wide`, `medium`, `narrow` | `auto` | Disposition : `auto` s'adapte à la largeur, les autres en imposent une (large, moyenne, étroite). |
+| `isCompact` | `true`, `false` | `false` | Style compact : pas de barre, seulement le nom de la limite et le pourcentage. |
+
+### Exemples
+
+```
+/usage-limits-config barHeight=12
+/usage-limits-config bandPadding=0
+/usage-limits-config showTokens=off
+/usage-limits-config windows=five_hour
+/usage-limits-config warnAt=80
+```
+
+Quand un long prompt laisse peu de place, la bande retire d'elle-même, dans l'ordre, la ligne des tokens, la ligne des resets, la marge puis la bordure, quels que soient ces réglages.

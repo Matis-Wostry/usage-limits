@@ -1,7 +1,7 @@
 {
   "name": "usage-limits",
-  "version": "0.11.0",
-  "description": "Shows the 5-hour and weekly usage limits as a band above the prompt, with a pace arrow.",
+  "version": "0.12.0",
+  "description": "Shows the 5-hour and weekly usage limits as a band above the prompt, with a pace arrow and the session's tokens.",
   "types": "./types/index.d.ts",
   "userConfig": {
     "windows": {
@@ -59,6 +59,28 @@
       "description": "auto adapts to the width; wide, medium or narrow forces one.",
       "options": ["auto", "wide", "medium", "narrow"],
       "default": "auto"
+    },
+    "barHeight": {
+      "type": "number",
+      "title": "Bar thickness (px)",
+      "description": "Thickness of each usage bar, in pixels. The terminal draws its bars in text and ignores it.",
+      "default": 6,
+      "min": 2,
+      "max": 20
+    },
+    "bandPadding": {
+      "type": "number",
+      "title": "Band height (rows)",
+      "description": "Vertical space above and below the band's content, in rows. 0 makes the band as low as it gets.",
+      "default": 1,
+      "min": 0,
+      "max": 3
+    },
+    "showTokens": {
+      "type": "boolean",
+      "title": "Show the tokens",
+      "description": "Writes under the band the last turn's input and output tokens, the session's totals and the context fill.",
+      "default": true
     },
     "isCompact": {
       "type": "boolean",

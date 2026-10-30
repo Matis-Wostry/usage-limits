@@ -16,7 +16,16 @@ La bande s'affiche dans VS Code. Le responsive est en place, d'après la valeur 
 - La largeur n'est plus écrite dans l'atome `width` pendant le tracé (c'était probablement ce qui empêchait le mod de s'afficher en 0.10.0). `/limites` n'affiche donc plus la largeur.
 - Barres : conversion colonnes vers pixels estimée à environ 9 px par colonne, calibrée sur des captures à 66 et 69 colonnes.
 
+## 0.12.0 (30 oct. 2026)
+
+- Réglages `barHeight` (épaisseur des barres SVG, en px) et `bandPadding` (marge verticale de la carte, en lignes).
+- Ligne des tokens sous la bande (`showTokens`) : dernier tour, total de la session, contexte. Détail du cache dans `/limites`.
+- Fenêtre par modèle (`seven_day_fable`...) : affichée seulement si ce modèle est sélectionné, à la place de la fenêtre générale. Le compte Pro ne remonte pas de fenêtre Fable au 30 oct. : jamais vu en vrai.
+- Tests : `claude plugin test .` (hooks/register.test.tsx).
+
 ## Reste à faire
+
+0. Vérifier en vrai dans VS Code : épaisseur des barres, hauteur de la bande, ligne des tokens (longueur en mode étroit).
 
 1. Régler les seuils 100 et 70 : demander la valeur « N col » en fenêtre large, et à partir de quelle largeur le rendu devient mauvais. Cas connu : à 70 colonnes (mode moyen) les barres de 84 px sont plus petites qu'à 69 (mode étroit).
 2. Vérifier le mode très étroit (32 colonnes et moins) : jamais vu sur capture.

@@ -1,11 +1,17 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { Limit } from '../types'
+import type { ContextFill, Limit, TokenCount } from '../types'
+
+const NO_TOKENS: TokenCount = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
 
 const limitsAtom = atom({ plugin: 'usage-limits', key: 'limits' } as const, [] as Limit[])
 const isHiddenAtom = atom({ plugin: 'usage-limits', key: 'isHidden' } as const, false)
 const widthAtom = atom({ plugin: 'usage-limits', key: 'width' } as const, 0)
+const modelAtom = atom({ plugin: 'usage-limits', key: 'model' } as const, '')
+const lastTurnAtom = atom({ plugin: 'usage-limits', key: 'lastTurn' } as const, null as TokenCount | null)
+const sessionTokensAtom = atom({ plugin: 'usage-limits', key: 'sessionTokens' } as const, NO_TOKENS)
+const contextAtom = atom({ plugin: 'usage-limits', key: 'context' } as const, null as ContextFill | null)
 
 const LABELS: Record<string, string> = {
   five_hour: '5 h',
@@ -50,6 +56,45 @@ const RESET_NAMES: Record<string, string> = {
   spend_limit: 'budget',
 }
 
+// A window per model (`seven_day_fable`, `seven_day_opus`...) is shown like the two known ones:
+// its label is the model's name, and it keeps the length of the window it narrows.
+const modelOf = (kind: string) => /^(?:five_hour|seven_day)_(.+)$/.exec(kind)?.[1]
+const labelOf = (kind: string) => {
+  const model = modelOf(kind)
+  return LABELS[kind] ?? (model ? model.charAt(0).toUpperCase() + model.slice(1).replace(/_/g, ' ') : kind)
+}
+const windowLength = (kind: string) =>
+  WINDOW_MS[kind] ?? (kind.startsWith('five_hour_') ? WINDOW_MS.five_hour : kind.startsWith('seven_day_') ? WINDOW_MS.seven_day : undefined)
+// The general window a kind narrows: `seven_day_fable` is a `seven_day`.
+const baseOf = (kind: string) => /^(five_hour|seven_day)_/.exec(kind)?.[1] ?? kind
+
+// A per-model window shows only while that model is selected (`/model fable`), and then
+// takes the place of the general window it narrows: the Fable bar replaces the 7 j one.
+const forModel = (limits: Limit[], model: string) => {
+  const selected = model.toLowerCase()
+  const isSelected = (l: Limit) => {
+    const name = modelOf(l.kind)
+    return name !== undefined && selected.includes(name.toLowerCase())
+  }
+  const narrowed = new Set(limits.filter(isSelected).map(l => baseOf(l.kind)))
+  return limits.filter(l => (modelOf(l.kind) === undefined ? !narrowed.has(l.kind) : isSelected(l)))
+}
+
+// Token counts the French way: 950, 2 k, 12,3 k, 1,25 M (no trailing zeros).
+const fmtTokens = (n: number) => {
+  const short = (value: number, digits: number) => String(Number(value.toFixed(digits))).replace('.', ',')
+  if (n < 1000) return String(n)
+  if (n < 1_000_000) return `${short(n / 1000, n < 10_000 ? 1 : 0)} k`
+  return `${short(n / 1_000_000, n < 10_000_000 ? 2 : 1)} M`
+}
+
+const addTokens = (a: TokenCount, b: TokenCount): TokenCount => ({
+  input: a.input + b.input,
+  output: a.output + b.output,
+  cacheRead: a.cacheRead + b.cacheRead,
+  cacheWrite: a.cacheWrite + b.cacheWrite,
+})
+
 const ICON_PATHS: Record<Verdict, string> = {
   push: '<path d="M14 20V9M9 13.5L14 8.5l5 5"/>',
   steady: '<path d="M9 11h10M9 17h10"/>',
@@ -65,20 +110,26 @@ const iconSvg = (verdict: Verdict, tip: string) =>
   ICON_PATHS[verdict] +
   `</g></svg>`
 
+// The SVG's height for a bar this thick: room for the tick above and below the track.
+const barBoxHeight = (thickness: number) => Math.max(16, thickness + 6)
+
 // A rounded track, the used share, and a tick where the clock stands in the window.
-const barSvg = (percent: number, accent: string, elapsed: number | null, width: number, tip: string) => {
+const barSvg = (percent: number, accent: string, elapsed: number | null, width: number, thickness: number, tip: string) => {
+  const height = barBoxHeight(thickness)
+  const top = (height - thickness) / 2
+  const radius = thickness / 2
   const used = Math.max(0, Math.min(100, percent)) * (width / 100)
   const tick =
     elapsed === null
       ? ''
-      : `<rect x="${Math.max(0, Math.min(width - 2.5, (elapsed / 100) * width - 1.25)).toFixed(1)}" y="1" width="2.5" height="14" rx="1" fill="#262626" stroke="#fff" stroke-opacity="0.55" stroke-width="0.6"/>`
+      : `<rect x="${Math.max(0, Math.min(width - 2.5, (elapsed / 100) * width - 1.25)).toFixed(1)}" y="1" width="2.5" height="${height - 2}" rx="1" fill="#262626" stroke="#fff" stroke-opacity="0.55" stroke-width="0.6"/>`
 
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="16" viewBox="0 0 ${width} 16">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
     `<title>${tip}</title>` +
-    `<rect x="0" y="0" width="${width}" height="16" fill="transparent"/>` +
-    `<rect x="0" y="5" width="${width}" height="6" rx="3" fill="${accent}" fill-opacity="0.2"/>` +
-    `<rect x="0" y="5" width="${Math.max(used, used > 0 ? 6 : 0).toFixed(1)}" height="6" rx="3" fill="${accent}"/>` +
+    `<rect x="0" y="0" width="${width}" height="${height}" fill="transparent"/>` +
+    `<rect x="0" y="${top}" width="${width}" height="${thickness}" rx="${radius}" fill="${accent}" fill-opacity="0.2"/>` +
+    `<rect x="0" y="${top}" width="${Math.max(used, used > 0 ? thickness : 0).toFixed(1)}" height="${thickness}" rx="${radius}" fill="${accent}"/>` +
     tick +
     `</svg>`
   )
@@ -102,6 +153,10 @@ export const register: Register = (on, options) => {
   const showPaceMark = options.showPaceMark !== false
   const isCompact = options.isCompact === true
   const layout = String(options.layout)
+  const showTokens = options.showTokens !== false
+  const barHeight = Math.max(2, Math.min(20, Number(options.barHeight) || 6))
+  const rawPadding = Number(options.bandPadding)
+  const bandPadding = Number.isFinite(rawPadding) ? Math.max(0, Math.min(3, Math.round(rawPadding))) : 1
 
   const warned = new Set<string>()
 
@@ -109,12 +164,12 @@ export const register: Register = (on, options) => {
   const colorFor = (percent: number) =>
     percent >= warnAt ? 'error' : percent >= cautionAt ? 'warning' : 'claude'
 
-  const isShown = (l: Limit) => windows === 'both' || l.kind === windows || !WINDOW_MS[l.kind]
+  const isShown = (l: Limit) => windows === 'both' || baseOf(l.kind) === windows || !windowLength(l.kind)
 
   // Compares what is used with the share of the window already elapsed.
   // Positive delta: usage is behind the clock, so there is room to push.
   const pace = (l: Limit, now: number) => {
-    const length = WINDOW_MS[l.kind]
+    const length = windowLength(l.kind)
     if (!length || !l.resetsAt) return null
 
     const left = Math.min(length, Math.max(0, Date.parse(l.resetsAt) - now))
@@ -134,8 +189,9 @@ export const register: Register = (on, options) => {
     const verdictFor = (delta: number): Verdict =>
       delta < -paceMargin ? 'slow' : delta > paceMargin ? 'push' : 'steady'
 
-    const session = limits.find(l => l.kind === 'five_hour')
-    const week = limits.find(l => l.kind === 'seven_day')
+    // A model's window (Fable's) stands in for the general one it replaced.
+    const session = limits.find(l => baseOf(l.kind) === 'five_hour')
+    const week = limits.find(l => baseOf(l.kind) === 'seven_day')
     const sessionPace = session ? pace(session, now) : null
     const weekPace = week ? pace(week, now) : null
 
@@ -149,12 +205,14 @@ export const register: Register = (on, options) => {
 
   on('session.measure', async ($, e, next) => {
     await update($, limitsAtom, () => [...e.rateLimits])
+    await update($, contextAtom, () => ({ tokens: e.context.tokens, window: e.context.window, percent: e.context.percent }))
 
-    for (const l of e.rateLimits.filter(isShown)) {
+    const model = await read($, modelAtom)
+    for (const l of forModel(e.rateLimits, model).filter(isShown)) {
       const key = `${l.kind}:${l.resetsAt ?? ''}`
       if (l.percentUsed >= warnAt && !warned.has(key)) {
         warned.add(key)
-        $.ui.toast(`Limite ${LABELS[l.kind] ?? l.kind} à ${Math.round(l.percentUsed)}%`)
+        $.ui.toast(`Limite ${labelOf(l.kind)} à ${Math.round(l.percentUsed)}%`)
       }
     }
 
@@ -176,8 +234,47 @@ export const register: Register = (on, options) => {
       description: 'Show or change the usage-limits settings',
       argumentHint: '[réglage=valeur]',
     })
-    const { rateLimits } = await $.session.usage()
+    const { rateLimits, context } = await $.session.usage()
     await update($, limitsAtom, () => [...rateLimits])
+    await update($, contextAtom, () => ({ tokens: context.tokens, window: context.window, percent: context.percent }))
+    const model = await $.session.model()
+    await update($, modelAtom, () => model)
+    return next(e)
+  })
+
+  // The selected model decides whether a model's window (Fable's) replaces the 7 j bar:
+  // read again at each turn of the main loop, so a `/model` shows from the next prompt.
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      const model = await $.session.model()
+      await update($, modelAtom, () => model)
+    }
+    return next(e)
+  })
+
+  // Every turn adds to the session's totals, subagents' too; the main loop's is the last turn.
+  on('turn.complete', async ($, e, next) => {
+    const result = await next(e)
+    const u = e.usage
+    if (u) {
+      const turn: TokenCount = {
+        input: u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens,
+        output: u.output_tokens,
+        cacheRead: u.cache_read_input_tokens,
+        cacheWrite: u.cache_creation_input_tokens,
+      }
+      await update($, sessionTokensAtom, total => addTokens(total ?? NO_TOKENS, turn))
+      if (e.agentId === undefined) await update($, lastTurnAtom, () => turn)
+    }
+    return result
+  })
+
+  // `/clear` starts the conversation over: so do the counts.
+  on('session.end', async ($, e, next) => {
+    if (e.reason === 'clear') {
+      await update($, sessionTokensAtom, () => NO_TOKENS)
+      await update($, lastTurnAtom, () => null)
+    }
     return next(e)
   })
 
@@ -244,12 +341,42 @@ export const register: Register = (on, options) => {
       const p = pace(l, now)
       const reset = resetIn(l.resetsAt, now)
       const gap = p ? ` (${p.delta >= 0 ? '+' : ''}${p.delta} pts vs time, ${p.glyph})` : ''
-      return `${LABELS[l.kind] ?? l.kind}: ${Math.round(l.percentUsed)}%${reset ? `, resets in ${reset}` : ''}${gap}`
+      return `${labelOf(l.kind)} (${l.kind}): ${Math.round(l.percentUsed)}%${reset ? `, resets in ${reset}` : ''}${gap}`
     })
 
+    const model = await read($, modelAtom)
+    const last = await read($, lastTurnAtom)
+    const total = await read($, sessionTokensAtom)
+    const context = await read($, contextAtom)
+    const shown = forModel(limits, model).map(l => labelOf(l.kind)).join(', ')
+    const cached = (t: TokenCount) => (t.cacheRead || t.cacheWrite ? ` (dont cache lu ${fmtTokens(t.cacheRead)}, écrit ${fmtTokens(t.cacheWrite)})` : '')
+    const tokenLines = [
+      ...(model ? [`Modèle : ${model} (bande : ${shown})`] : []),
+      ...(last ? [`Dernier tour : entrée ${fmtTokens(last.input)}${cached(last)}, sortie ${fmtTokens(last.output)}`] : []),
+      `Session : entrée ${fmtTokens(total.input)}${cached(total)}, sortie ${fmtTokens(total.output)}`,
+      ...(context?.tokens !== undefined ? [`Contexte : ${fmtTokens(context.tokens)} / ${fmtTokens(context.window)} (${context.percent ?? 0} %)`] : []),
+    ]
+
     const width = await read($, widthAtom)
-    return { text: [...lines, ...(width ? [`Largeur de la bande : ${width} colonnes`] : [])].join('\n') }
+    return { text: [...lines, '', ...tokenLines, ...(width ? [`Largeur de la bande : ${width} colonnes`] : [])].join('\n') }
   })
+
+  // The line under the band: the last turn, the session's totals, the context fill.
+  // Short form for the narrow layouts, where every column counts.
+  const tokensLine = (last: TokenCount | null, total: TokenCount, context: ContextFill | null, isShort: boolean) => {
+    if (!last && total.input === 0 && context?.tokens === undefined) return ''
+    const parts: string[] = []
+    if (isShort) {
+      if (last) parts.push(`Tour ↓${fmtTokens(last.input)} ↑${fmtTokens(last.output)}`)
+      parts.push(`Session ↓${fmtTokens(total.input)} ↑${fmtTokens(total.output)}`)
+      if (context?.percent !== undefined) parts.push(`Ctx ${context.percent} %`)
+    } else {
+      if (last) parts.push(`Dernier tour : entrée ${fmtTokens(last.input)}, sortie ${fmtTokens(last.output)}`)
+      parts.push(`Session : entrée ${fmtTokens(total.input)}, sortie ${fmtTokens(total.output)}`)
+      if (context?.tokens !== undefined) parts.push(`Contexte : ${fmtTokens(context.tokens)} / ${fmtTokens(context.window)} (${context.percent ?? 0} %)`)
+    }
+    return parts.join(' · ')
+  }
 
   // Wide: everything on one row. Medium: shorter bars. Narrow: icon and both bars on one row. Tiny: no icon, the bars one above the other.
   // Columns are what the band's column offers; `layout` forces one when it misjudges.
@@ -259,14 +386,15 @@ export const register: Register = (on, options) => {
   }
 
   const tipFor = (l: Limit, p: ReturnType<typeof pace>, now: number) => {
-    const parts = [`${LABELS[l.kind] ?? l.kind} : ${Math.round(l.percentUsed)} % consommé`]
+    const parts = [`${labelOf(l.kind)} :${Math.round(l.percentUsed)} % consommé`]
     if (p) parts.push(`${Math.round(p.elapsed)} % du temps écoulé (repère noir)`)
     if (l.resetsAt) parts.push(`reset dans ${resetIn(l.resetsAt, now)}`)
     return parts.join(' · ')
   }
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const limits = (await read($, limitsAtom)).filter(isShown)
+    const model = await read($, modelAtom)
+    const limits = forModel(await read($, limitsAtom), model).filter(isShown)
 
     if (e.props.hasSurvey || limits.length === 0 || (await read($, isHiddenAtom))) {
       return next(e)
@@ -283,20 +411,29 @@ export const register: Register = (on, options) => {
     // From 50 to 69 columns the bars keep at most 65 % of the room they could take.
     const barWidth = hasWidth && columns <= 69 && columns >= 50 ? Math.round(fitWidth * 0.65) : fitWidth
 
+    const now = await $.clock.now()
+    const resets = limits
+      .map(l => (l.resetsAt ? `${RESET_NAMES[l.kind] ?? labelOf(l.kind).toLowerCase()} ${resetIn(l.resetsAt, now)}` : ''))
+      .filter(Boolean)
+      .join(' · ')
+    const tokens = showTokens
+      ? tokensLine(await read($, lastTurnAtom), await read($, sessionTokensAtom), await read($, contextAtom), isStacked)
+      : ''
+
     // A long prompt leaves the band few rows (maxRows): a taller tree would scroll or be cut.
-    // Drop the extras one by one (debug line, reset line, vertical padding, border), then hide.
+    // Drop the extras one by one (tokens line, reset line, vertical padding, border), then hide.
     const contentRows = isTiny ? limits.length : 1
     const hasRoom = typeof e.props.maxRows === 'number' && Number.isFinite(e.props.maxRows)
     const rows = hasRoom ? e.props.maxRows : Infinity
-    const hasReset = showReset
-    const hasResetLine = hasReset && rows >= contentRows + 4 + 1
-    const hasPadding = rows >= contentRows + 4
+    const fullCard = contentRows + 2 + bandPadding * 2
+    const hasResetLine = showReset && resets !== '' && rows >= fullCard + 1
+    const hasTokenLine = tokens !== '' && rows >= fullCard + (hasResetLine ? 1 : 0) + 1
+    const hasPadding = bandPadding > 0 && rows >= fullCard
     const hasBorder = rows >= contentRows + 2
     if (rows < contentRows) {
       return next(e)
     }
 
-    const now = await $.clock.now()
     const ui = $.ui.resolve(e)
     const { Box, Text } = ui
     // The terminal has no Svg: it keeps a text icon and the line bar, with no tinted card
@@ -307,10 +444,6 @@ export const register: Register = (on, options) => {
 
     const verdict = verdictOf(limits, now)
     const { label, accent, glyph } = VERDICTS[verdict]
-    const resets = limits
-      .map(l => (l.resetsAt ? `${RESET_NAMES[l.kind] ?? l.kind} ${resetIn(l.resetsAt, now)}` : ''))
-      .filter(Boolean)
-      .join(' · ')
 
     return (
       <Box flexDirection="column" gap={0} alignItems="stretch">
@@ -318,7 +451,7 @@ export const register: Register = (on, options) => {
           gap={isStacked ? 2 : 3}
           flexDirection={isTiny ? 'column' : 'row'}
           paddingX={2}
-          paddingY={hasPadding ? 1 : 0}
+          paddingY={hasPadding ? bandPadding : 0}
           alignItems="center"
           borderStyle={hasBorder ? 'round' : undefined}
           borderColor={Svg ? `${accent}40` : accent}
@@ -340,19 +473,19 @@ export const register: Register = (on, options) => {
 
             return (
               <Box key={l.kind} gap={isStacked ? 1 : 2} alignItems="center" justifyContent={isTiny ? 'space-between' : 'flex-start'}>
-                <Text dimColor size="footnote">{LABELS[l.kind] ?? l.kind}</Text>
+                <Text dimColor size="footnote">{labelOf(l.kind)}</Text>
                 {isCompact ? null : Svg ? (
                   <Svg
-                    source={barSvg(l.percentUsed, accent, markAt, barWidth, tipFor(l, p, now))}
+                    source={barSvg(l.percentUsed, accent, markAt, barWidth, barHeight, tipFor(l, p, now))}
                     alt=""
                     isInteractive
                     width={barWidth}
-                    height={16}
+                    height={barBoxHeight(barHeight)}
                   />
                 ) : (
                   <Text>
                     {cells.map((c, i) => (
-                      <Text key={i} color={c.isTick ? undefined : c.isFilled ? accent : 'subtle'} bold={c.isTick}>
+                      <Text key={String(i)} color={c.isTick ? undefined : c.isFilled ? accent : 'subtle'} bold={c.isTick}>
                         {c.isTick ? '┃' : c.isFilled ? '━' : '╌'}
                       </Text>
                     ))}
@@ -364,9 +497,14 @@ export const register: Register = (on, options) => {
             )
           })}
         </Box>
-        {hasResetLine && resets ? (
+        {hasResetLine ? (
           <Box justifyContent="space-between" flexDirection={isStacked ? 'column' : 'row'} paddingX={2}>
             <Text dimColor size="footnote">Reset : {resets}</Text>
+          </Box>
+        ) : null}
+        {hasTokenLine ? (
+          <Box paddingX={2}>
+            <Text dimColor size="footnote">{tokens}</Text>
           </Box>
         ) : null}
       </Box>
