@@ -41,6 +41,35 @@ Réponds `y` pour ajouter le marketplace, puis choisis la portée (utilisateur p
 
 3. Ouvre une nouvelle session (ou tape `/reload-plugins` si elle existe chez toi), puis envoie un message à Claude : la bande n'apparaît qu'après sa première réponse.
 
+## Mise à jour
+
+### Installé avec le marketplace
+
+Dans un terminal :
+
+```
+claude plugin marketplace update usage-limits
+claude plugin update usage-limits@usage-limits
+```
+
+La première commande récupère la dernière version sur GitHub, la seconde l'installe. Redémarre ensuite Claude Code pour qu'elle s'applique.
+
+Dans l'application bureau : clique sur **+** à côté du champ de saisie, **Plugins**, rafraîchis le marketplace `usage-limits`, puis mets le plugin à jour.
+
+### Installé depuis un dossier local
+
+Dans le dossier du dépôt :
+
+```
+git pull
+```
+
+Puis tape `/reload-plugins` (ou ouvre une nouvelle session) et envoie un message à Claude : la bande revient après sa première réponse.
+
+### Vérifier la version
+
+`/usage-limits-config` doit lister les réglages `barHeight`, `bandPadding` et `showTokens` : ils sont arrivés avec la 0.12.0.
+
 ## Où ça s'affiche
 
 La bande s'affiche dans **VS Code**. Elle n'apparaît pas dans l'onglet Code de l'application bureau. Si elle manque, tape `/limites` : une réponse avec des chiffres prouve que le mod est chargé.
