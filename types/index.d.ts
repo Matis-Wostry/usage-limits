@@ -5,6 +5,12 @@ export type TokenCount = { input: number; output: number; cacheRead: number; cac
 
 export type ContextFill = { tokens?: number; window: number; percent?: number }
 
+// One day of the history pane: each limit's peak, and the tokens without the cache reads.
+export type HistoryDay = { peaks: Record<string, number>; input: number; output: number }
+
+// Keyed by the local day, `YYYY-MM-DD`.
+export type History = Record<string, HistoryDay>
+
 declare module 'claude-code' {
   interface PluginState {
     'usage-limits': {
@@ -16,6 +22,7 @@ declare module 'claude-code' {
       lastTurn: TokenCount | null
       sessionTokens: TokenCount
       context: ContextFill | null
+      history: History
     }
   }
 }

@@ -1,5 +1,7 @@
 # usage-limits
 
+**Français** · [English](README.en.md)
+
 Un mod pour Claude Code qui affiche ta consommation des limites (session de 5 h et semaine) au-dessus du champ de saisie, avec un verdict de rythme :
 
 - **Pousser** : tu consommes moins vite que le temps ne passe, tu as de la marge.
@@ -68,7 +70,7 @@ Puis tape `/reload-plugins` (ou ouvre une nouvelle session) et envoie un message
 
 ### Vérifier la version
 
-`/usage-limits-config` doit lister les réglages `barHeight`, `bandPadding` et `showTokens` : ils sont arrivés avec la 0.12.0.
+`/usage-limits-config` doit lister les réglages `language`, `resetFormat`, `showForecast` et `history` : ils sont arrivés avec la 0.13.0.
 
 ## Où ça s'affiche
 
@@ -78,11 +80,45 @@ La bande s'affiche dans **VS Code** et dans l'**onglet Code de l'application de 
 
 - `/limites` : détail en texte, et fait revenir la bande si elle est masquée.
 - `/limites-masquer` : masque la bande.
+- `/limites-historique` : ouvre le panneau d'historique, si l'option `history` est activée.
 - `/usage-limits-config` : liste les réglages du mod ; `/usage-limits-config showPaceMark=false` en change un.
+
+Avec `language=en`, les commandes deviennent `/limits`, `/limits-hide` et `/limits-history`.
+
+## Langue
+
+Tout le mod existe en français et en anglais : la bande, les commandes, les messages, le panneau et le menu `/config`. Le français est la langue par défaut :
+
+```
+/usage-limits-config language=en
+```
+
+## Prévision
+
+Quand ta consommation actuelle te mènerait à la limite avant son reset, une ligne l'annonce sous la bande et dans `/limites` : « À ce rythme : limite 5 h dans 25 min ». Rien ne s'affiche si le reset arrive d'abord, ni pendant le premier dixième d'une fenêtre, où une seule grosse requête fausserait le calcul. `showForecast=false` retire cette ligne.
+
+## Reset
+
+`resetFormat` choisit comment écrire le reset, sous la bande, dans `/limites` et au survol des barres :
+
+- `duration` (par défaut) : le temps restant, « session 1 h 15 ».
+- `clock` : l'heure, à ton fuseau horaire, « session à 18 h 40 · semaine sam. à 21 h 05 ».
+
+## Historique
+
+Le panneau est désactivé par défaut. Pour l'activer :
+
+```
+/usage-limits-config history=true
+```
+
+Il s'ouvre alors à chaque session, à côté de la conversation ; `/limites-historique` le rouvre si tu l'as fermé. Chaque jour, il montre le pic de chaque limite et les tokens consommés, sans la lecture du cache. L'historique couvre tes sessions, mais garde au plus 90 jours.
+
+Avec `history=false`, le panneau se ferme et plus rien n'est enregistré. Ce qui est déjà enregistré reste conservé et réapparaît si tu réactives l'option.
 
 ## Tokens
 
-Sous la bande, une ligne donne les tokens du dernier tour (entrée, sortie), le total de la session (sous-agents compris) et le remplissage du contexte. L'entrée compte aussi la part servie par le cache ; `/limites` détaille cette part. Les totaux partent du début de la session, survivent à un rechargement du mod et repartent à zéro après `/clear` ou `/resume`. La ligne revient avec la réponse suivante.
+Sous la bande, une ligne donne les tokens du dernier tour (entrée, sortie), le total de la session (sous-agents compris) et le remplissage du contexte. L'entrée compte aussi la part servie par le cache ; `/limites` détaille cette part. Les totaux commencent avec la session, survivent à un rechargement du mod et repartent à zéro après `/clear` ou `/resume`. La ligne revient avec la réponse suivante.
 
 ## Fable
 
@@ -93,25 +129,29 @@ Quand Claude Code remonte une limite propre à un modèle (par exemple `seven_da
 Trois façons de régler le mod :
 
 - `/usage-limits-config` : liste les réglages et leur valeur actuelle.
-- `/usage-limits-config réglage=valeur` : en change un, par exemple `/usage-limits-config barHeight=10`. Pour les booléens, `true`/`false`, `on`/`off`, `oui`/`non` et `1`/`0` marchent tous.
+- `/usage-limits-config réglage=valeur` : en change un, par exemple `/usage-limits-config barHeight=10`. Pour les booléens, `true`/`false`, `on`/`off`, `oui`/`non`, `yes`/`no` et `1`/`0` marchent tous.
 - `/config` : les mêmes réglages, dans le menu de Claude Code.
 
 ### Paramètres
 
 | Paramètre | Valeurs | Défaut | Effet |
 |---|---|---|---|
+| `language` | `fr`, `en` | `fr` | Langue de la bande, des commandes, des messages, du panneau et du menu `/config`. |
 | `windows` | `both`, `five_hour`, `seven_day` | `both` | Les limites affichées : les deux, ou seulement la session de 5 h, ou seulement la semaine. |
 | `warnAt` | 1 à 100 (%) | `90` | Seuil d'alerte : à partir de là, la barre de cette limite passe au rouge, le verdict devient « Limite proche » et une notification s'affiche. |
 | `cautionAt` | 1 à 100 (%) | `70` | Seuil d'attention : à partir de là, la barre de cette limite passe à l'orange. |
 | `paceMargin` | 0 à 50 (points) | `8` | Zone neutre : tant que l'écart entre la consommation et le temps écoulé reste sous cette valeur, le rythme est « normal ». |
 | `showDelta` | `true`, `false` | `false` | Écrit l'écart en points à côté de chaque barre, par exemple `+12`. |
 | `showPaceMark` | `true`, `false` | `true` | Dessine sur chaque barre le trait qui marque le temps écoulé dans la fenêtre. |
+| `showForecast` | `true`, `false` | `true` | Annonce quand la limite sera atteinte à ce rythme, si c'est avant le reset. |
 | `showReset` | `true`, `false` | `true` | Ajoute sous la bande la ligne « Reset : session … · semaine … ». |
+| `resetFormat` | `duration`, `clock` | `duration` | Écrit le reset en temps restant ou en heure. |
 | `showTokens` | `true`, `false` | `true` | Ajoute sous la bande la ligne des tokens : dernier tour, session, contexte. |
 | `barHeight` | 2 à 20 (px) | `6` | Épaisseur des barres. Le terminal dessine ses barres en texte et ignore ce réglage. |
 | `bandPadding` | 0 à 3 (lignes) | `1` | Hauteur de la bande : marge au-dessus et au-dessous de son contenu. `0` la rend la plus basse possible. |
 | `layout` | `auto`, `wide`, `medium`, `narrow` | `auto` | Disposition : `auto` s'adapte à la largeur, les autres en imposent une (large, moyenne, étroite). |
 | `isCompact` | `true`, `false` | `false` | Style compact : pas de barre, seulement le nom de la limite et le pourcentage. |
+| `history` | `true`, `false` | `false` | Active le panneau d'historique et l'enregistrement. |
 
 ### Exemples
 
@@ -121,6 +161,8 @@ Trois façons de régler le mod :
 /usage-limits-config showTokens=off
 /usage-limits-config windows=five_hour
 /usage-limits-config warnAt=80
+/usage-limits-config resetFormat=clock
+/usage-limits-config history=true
 ```
 
-Quand un long prompt laisse peu de place, la bande retire d'elle-même, dans l'ordre, la ligne des tokens, la ligne des resets, la marge puis la bordure, quels que soient ces réglages.
+Quand un long prompt laisse peu de place, la bande retire d'elle-même, dans l'ordre, la ligne des tokens, la ligne des resets, la prévision, la marge puis la bordure, quels que soient ces réglages.

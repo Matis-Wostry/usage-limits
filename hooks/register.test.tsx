@@ -25,7 +25,21 @@ const USAGE = (input: number, output: number, cacheRead = 0) => ({
 // Hands back the clock, and the toasts shown so far.
 const engine = (on: Parameters<TestBody>[1], model: string, limits: typeof LIMITS | Limit[] = LIMITS, now = '2098-12-31T23:00:00Z') => {
   const toasts: string[] = []
-  on('command.register', (_, e) => ({ value: { command: e.name } }))
+  const commands: string[] = []
+  const opened: string[] = []
+  const closed: string[] = []
+  on('command.register', (_, e) => {
+    commands.push(e.name)
+    return { value: { command: e.name } }
+  })
+  on('ui.open', (_, e) => {
+    opened.push(`${e.id}:${e.title}`)
+    return { value: { isPlaced: true } }
+  })
+  on('ui.close', (_, e) => {
+    closed.push(e.id)
+    return { value: undefined }
+  })
   on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 110_000, window: 1_000_000, percent: 11 }, rateLimits: limits } }))
   on('session.model', () => ({ value: model }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
@@ -33,6 +47,7 @@ const engine = (on: Parameters<TestBody>[1], model: string, limits: typeof LIMIT
   on('session.measure', (_, e) => ({ changed: e.changed }))
   on('turn.complete', (_, e) => ({ text: e.answer, usage: e.usage }))
   on('ui.status', () => ({ value: undefined }))
+  on('ui.invalidate', () => ({ value: undefined }))
   on('ui.toast', (_, e) => {
     toasts.push(e.text)
     return { value: undefined }
@@ -41,7 +56,7 @@ const engine = (on: Parameters<TestBody>[1], model: string, limits: typeof LIMIT
     const { Text } = $.ui.resolve(e)
     return <Text>engine</Text>
   })
-  return { clock: mock.clock(on, { now: Date.parse(now) }), toasts }
+  return { clock: mock.clock(on, { now: Date.parse(now) }), toasts, commands, opened, closed }
 }
 
 type Limit = { kind: string; percentUsed: number; resetsAt?: string }
@@ -180,8 +195,8 @@ test('a window past its reset starts over at zero', async ($, on) => {
 
   // The engine fills in the rest of the input.
   const detail = await $.command.run({ command: 'limites' } as Parameters<typeof $.command.run>[0])
-  expect(detail.text).toContain('5 h (five_hour): 0%')
-  expect(detail.text).not.toContain('95%')
+  expect(detail.text).toContain('5 h (five_hour) : 0 %')
+  expect(detail.text).not.toContain('95 %')
 })
 
 for (const reason of ['clear', 'resume'] as const) {
@@ -216,7 +231,7 @@ test('a window reaching warnAt shows one toast', async ($, on) => {
   const measure = { context: { window: 1_000_000 }, rateLimits: limitsAt(95, 5), changed: ['rateLimits' as const] }
   await $.session.measure(measure)
   await $.session.measure(measure)
-  expect(toasts).toEqual(['Limite 5 h à 95%'])
+  expect(toasts).toEqual(['Limite 5 h à 95 %'])
 })
 
 test('a forced layout keeps its bar width', { options: { layout: 'wide' } }, async ($, on) => {
@@ -283,6 +298,367 @@ test('near a million, tokens read in millions', async ($, on) => {
 
   const ui = await $.ui.mount(band('desktop'))
   expect((await ui.find({ type: 'Text', text: /Dernier tour/ }))?.text).toContain('Dernier tour : entrée 1 M, sortie 1 M')
+  await ui.unmount()
+})
+
+// ---- Forecast ----
+
+// At 22:45, 3 h 45 of the 5 h window are gone: 90 % used leaves 10 %, at 24 % an hour: 25 min.
+test('the band says when the limit comes at this pace', async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(90, 5), AT_2245)
+  await $.session.start(START)
+
+  const ui = await $.ui.mount(band('desktop'))
+  expect((await ui.find({ type: 'Text', text: /rythme/ }))?.text).toBe('À ce rythme : limite 5 h dans 25 min')
+  await ui.unmount()
+})
+
+test('no forecast when the reset comes first', async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+
+  const ui = await $.ui.mount(band('desktop'))
+  expect(await ui.find({ type: 'Text', text: /rythme/ })).toBeFalsy()
+  await ui.unmount()
+})
+
+test('no forecast in the first tenth of a window', async ($, on) => {
+  engine(on, 'claude-opus-5-5', [{ kind: 'five_hour', percentUsed: 40, resetsAt: FIVE }], '2098-12-31T19:20:00Z')
+  await $.session.start(START)
+
+  const ui = await $.ui.mount(band('desktop'))
+  expect(await ui.find({ type: 'Text', text: /rythme/ })).toBeFalsy()
+  await ui.unmount()
+})
+
+test('showForecast off hides the forecast', { options: { showForecast: false } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(90, 5), AT_2245)
+  await $.session.start(START)
+
+  const ui = await $.ui.mount(band('desktop'))
+  expect(await ui.find({ type: 'Text', text: /rythme/ })).toBeFalsy()
+  await ui.unmount()
+})
+
+test('when rows run short, the forecast stays before the reset line', async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(90, 5), AT_2245)
+  await $.session.start(START)
+
+  const six = await $.ui.mount(band('terminal', 120, 6))
+  expect(await six.find({ type: 'Text', text: /rythme/ })).toBeTruthy()
+  expect(await six.find({ type: 'Text', text: /^Reset/ })).toBeFalsy()
+  await six.unmount()
+
+  const seven = await $.ui.mount(band('terminal', 120, 7))
+  expect(await seven.find({ type: 'Text', text: /^Reset/ })).toBeTruthy()
+  await seven.unmount()
+})
+
+// ---- Reset format ----
+
+// 2099-01-01 is a Thursday, the 3rd a Saturday. Local times: the display follows the person's clock.
+const CLOCK_NOW = new Date(2099, 0, 1, 18, 0).toISOString()
+const CLOCK_LIMITS: Limit[] = [
+  { kind: 'five_hour', percentUsed: 50, resetsAt: new Date(2099, 0, 1, 18, 40).toISOString() },
+  { kind: 'seven_day', percentUsed: 20, resetsAt: new Date(2099, 0, 3, 21, 5).toISOString() },
+]
+
+test('resetFormat clock writes the time of the reset', { options: { resetFormat: 'clock' } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5', CLOCK_LIMITS, CLOCK_NOW)
+  await $.session.start(START)
+
+  const ui = await $.ui.mount(band('desktop'))
+  expect((await ui.find({ type: 'Text', text: /^Reset/ }))?.text).toBe('Reset : session à 18 h 40 · semaine sam. à 21 h 05')
+  const [five] = (await ui.findAll({ type: 'Svg' })).filter(s => /consommé/.test(String(s.props.source)))
+  expect(String(five?.props.source)).toContain('reset à 18 h 40')
+  await ui.unmount()
+
+  const detail = await $.command.run({ command: 'limites' } as Parameters<typeof $.command.run>[0])
+  expect(detail.text).toContain('reset à 18 h 40')
+})
+
+test('resetFormat clock, in English', { options: { resetFormat: 'clock', language: 'en' } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5', CLOCK_LIMITS, CLOCK_NOW)
+  await $.session.start(START)
+
+  const ui = await $.ui.mount(band('desktop'))
+  expect((await ui.find({ type: 'Text', text: /^Reset/ }))?.text).toBe('Reset: session at 18:40 · week Sat at 21:05')
+  await ui.unmount()
+})
+
+// ---- Languages ----
+
+test('in French, the commands are French', async ($, on) => {
+  const { commands } = engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+  expect(commands).toEqual(['limites', 'limites-masquer', 'usage-limits-config'])
+})
+
+test('in English, the commands are English', { options: { language: 'en' } }, async ($, on) => {
+  const { commands } = engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+  expect(commands).toEqual(['limits', 'limits-hide', 'usage-limits-config'])
+})
+
+test('in English, the band is English', { options: { language: 'en' } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(90, 5), AT_2245)
+  await $.session.start(START)
+  await $.turn.complete(turn('t1', USAGE(400, 1200)))
+
+  const ui = await $.ui.mount(band('desktop'))
+  expect(await ui.find({ type: 'Text', text: 'Near limit' })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^7 d$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^90%$/ })).toBeTruthy()
+  expect((await ui.find({ type: 'Text', text: /pace/ }))?.text).toBe('At this pace: 5 h limit in 25 min')
+  expect((await ui.find({ type: 'Text', text: /^Reset/ }))?.text).toBe('Reset: session 1 h 15 · week 2 d 1 h')
+  expect((await ui.find({ type: 'Text', text: /Last turn/ }))?.text).toBe('Last turn: input 400, output 1.2 k · Session: input 400, output 1.2 k · Context: 110 k / 1 M (11%)')
+  const [five] = (await ui.findAll({ type: 'Svg' })).filter(s => /used/.test(String(s.props.source)))
+  expect(String(five?.props.source)).toContain('<title>5 h: 90% used · 75% of the time elapsed (black mark) · resets in 1 h 15')
+  expect(five?.props.alt).toBe('5 h: 90%')
+  await ui.unmount()
+})
+
+test('/limites reads entirely in French', async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(90, 5), AT_2245)
+  await $.session.start(START)
+  await $.turn.complete(turn('t1', USAGE(400, 1200, 9000)))
+
+  const detail = await $.command.run({ command: 'limites' } as Parameters<typeof $.command.run>[0])
+  expect(detail.text).toBe([
+    '5 h (five_hour) : 90 %, reset dans 1 h 15 (-15 pts par rapport au temps, ↓)',
+    '7 j (seven_day) : 5 %, reset dans 2 j 1 h (+66 pts par rapport au temps, ↑)',
+    'À ce rythme : limite 5 h dans 25 min',
+    '',
+    'Modèle : claude-opus-5-5 (bande : 5 h, 7 j)',
+    'Dernier tour : entrée 9,4 k (dont cache lu 9 k, écrit 0), sortie 1,2 k',
+    'Session : entrée 9,4 k (dont cache lu 9 k, écrit 0), sortie 1,2 k',
+    'Contexte : 110 k / 1 M (11 %)',
+  ].join('\n'))
+})
+
+test('/limits reads entirely in English', { options: { language: 'en' } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(90, 5), AT_2245)
+  await $.session.start(START)
+  await $.turn.complete(turn('t1', USAGE(400, 1200, 9000)))
+
+  const detail = await $.command.run({ command: 'limits' } as Parameters<typeof $.command.run>[0])
+  expect(detail.text).toBe([
+    '5 h (five_hour): 90%, resets in 1 h 15 (-15 pts vs time, ↓)',
+    '7 d (seven_day): 5%, resets in 2 d 1 h (+66 pts vs time, ↑)',
+    'At this pace: 5 h limit in 25 min',
+    '',
+    'Model: claude-opus-5-5 (band: 5 h, 7 d)',
+    'Last turn: input 9.4 k (cached read 9 k, written 0), output 1.2 k',
+    'Session: input 9.4 k (cached read 9 k, written 0), output 1.2 k',
+    'Context: 110 k / 1 M (11%)',
+  ].join('\n'))
+})
+
+test('hiding the band answers in the language chosen', { options: { language: 'en' } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+  const answer = await $.command.run({ command: 'limits-hide' } as Parameters<typeof $.command.run>[0])
+  expect(answer.text).toBe('Band hidden. /limits brings it back.')
+})
+
+test('the toast speaks English too', { options: { language: 'en' } }, async ($, on) => {
+  const { toasts } = engine(on, 'claude-opus-5-5', limitsAt(95, 5), AT_2245)
+  await $.session.measure({ context: { window: 1_000_000 }, rateLimits: limitsAt(95, 5), changed: ['rateLimits'] })
+  expect(toasts).toEqual(['5 h limit at 95%'])
+})
+
+const CONFIG_ROW = { key: 'usage-limits.warnAt', label: 'Alert threshold (%)', description: 'The bar turns red.', isHidden: false }
+const describeRow = ($: Parameters<TestBody>[0]) =>
+  $.config.describe({ ...CONFIG_ROW, provider: { plugin: 'engine', tier: 'core' } } as Parameters<typeof $.config.describe>[0])
+const describedAsIs = (on: Parameters<TestBody>[1]) =>
+  on('config.describe', (_, e) => ({ label: e.label, description: e.description, isHidden: e.isHidden }))
+
+test('in French, the /config menu is French', async ($, on) => {
+  describedAsIs(on)
+  expect((await describeRow($)).label).toBe('Seuil d’alerte (%)')
+})
+
+test('in English, the /config menu keeps the manifest words', { options: { language: 'en' } }, async ($, on) => {
+  describedAsIs(on)
+  expect((await describeRow($)).label).toBe('Alert threshold (%)')
+})
+
+const configRows = (on: Parameters<TestBody>[1]) => {
+  on('config.list', () => ({
+    value: [
+      { key: 'usage-limits.warnAt', label: 'x', kind: 'number', value: 90, provider: { plugin: 'usage-limits', tier: 'user' }, isLocked: false },
+      { key: 'usage-limits.showDelta', label: 'x', kind: 'boolean', value: false, provider: { plugin: 'usage-limits', tier: 'user' }, isLocked: false },
+    ],
+  } as never))
+}
+const runConfig = ($: Parameters<TestBody>[0], args: string) =>
+  $.command.run({ command: 'usage-limits-config', args } as Parameters<typeof $.command.run>[0])
+
+test('/usage-limits-config reads in French', async ($, on) => {
+  configRows(on)
+  expect((await runConfig($, '')).text).toBe('Réglages de usage-limits (change avec /usage-limits-config réglage=valeur) :\nwarnAt = 90\nshowDelta = false')
+  expect((await runConfig($, 'nope=1')).text).toBe('Réglage inconnu : nope\nwarnAt = 90\nshowDelta = false')
+  expect((await runConfig($, 'warnAt=abc')).text).toBe('warnAt attend un nombre.')
+  expect((await runConfig($, 'showDelta=abc')).text).toBe('showDelta attend true ou false.')
+})
+
+test('/usage-limits-config reads in English', { options: { language: 'en' } }, async ($, on) => {
+  configRows(on)
+  expect((await runConfig($, '')).text).toBe('usage-limits settings (change with /usage-limits-config setting=value):\nwarnAt = 90\nshowDelta = false')
+  expect((await runConfig($, 'nope=1')).text).toBe('Unknown setting: nope\nwarnAt = 90\nshowDelta = false')
+  expect((await runConfig($, 'warnAt=abc')).text).toBe('warnAt expects a number.')
+  expect((await runConfig($, 'showDelta=abc')).text).toBe('showDelta expects true or false.')
+})
+
+// ---- History ----
+
+const PANE = (bodyColumns = 80) => ({
+  plugin: 'usage-limits',
+  component: 'Pane',
+  requestId: 'usage-limits-history',
+  surface: 'desktop',
+  props: { title: 'x', isFocused: false, bodyColumns, placement: 'dock', scroll: { offset: 0, bodyRows: 20 }, view: {} },
+}) as const
+// Local noon on Friday the 2nd of January 2099.
+const JAN_2 = new Date(2099, 0, 2, 12, 0).toISOString()
+const measureAt = (five: number) => ({ context: { window: 1_000_000 }, rateLimits: limitsAt(five, 5), changed: ['rateLimits' as const] })
+
+test('history off: nothing recorded, no command, no pane', async ($, on) => {
+  const stored: string[] = []
+  const { commands, opened } = engine(on, 'claude-opus-5-5', limitsAt(50, 20), JAN_2)
+  on('store.set', (_, e) => {
+    stored.push(e.key)
+    return { value: undefined }
+  })
+  await $.session.start(START)
+  await $.session.measure(measureAt(40))
+  await $.turn.complete(turn('t1', USAGE(100, 200)))
+  expect(stored).toEqual([])
+  expect(opened).toEqual([])
+  expect(commands).not.toContain('limites-historique')
+})
+
+test('history off closes a pane left open', async ($, on) => {
+  const { closed } = engine(on, 'claude-opus-5-5', limitsAt(50, 20), JAN_2)
+  await $.session.start(START)
+  expect(closed).toEqual(['usage-limits-history'])
+})
+
+test('history on: the pane opens at start and its command is there', { options: { history: true } }, async ($, on) => {
+  const { commands, opened } = engine(on, 'claude-opus-5-5', limitsAt(50, 20), JAN_2)
+  mock.store(on)
+  await $.session.start(START)
+  expect(opened).toEqual(['usage-limits-history:Historique'])
+  expect(commands).toContain('limites-historique')
+  const answer = await $.command.run({ command: 'limites-historique' } as Parameters<typeof $.command.run>[0])
+  expect(answer.text).toBe('Panneau d’historique ouvert.')
+})
+
+test('the pane shows each day’s peak and its tokens without the cache read', { options: { history: true } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), JAN_2)
+  mock.store(on)
+  await $.session.start(START)
+  await $.session.measure(measureAt(40))
+  await $.session.measure(measureAt(60))
+  await $.session.measure(measureAt(55))
+  await $.turn.complete(turn('t1', USAGE(1000, 300, 90_000)))
+  await $.turn.complete(turn('t2', USAGE(200, 100), 'agent-1'))
+
+  const ui = await $.ui.mount(PANE())
+  expect(await ui.find({ type: 'Text', text: /^02\/01$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^60 %$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^55 %$/ })).toBeFalsy()
+  expect(await ui.find({ type: 'Text', text: /^↓1,2 k ↑400$/ })).toBeTruthy()
+  await ui.unmount()
+})
+
+test('the pane keeps earlier sessions, newest day first', { options: { history: true } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), JAN_2)
+  mock.store(on, { 'history-v1': { '2099-01-01': { peaks: { five_hour: 33 }, input: 1000, output: 2000 } } })
+  await $.session.start(START)
+  await $.session.measure(measureAt(40))
+
+  const ui = await $.ui.mount(PANE())
+  const dates = (await ui.findAll({ type: 'Text', text: /^\d\d\/\d\d$/ })).map(t => t.text)
+  expect(dates).toEqual(['02/01', '01/01'])
+  expect(await ui.find({ type: 'Text', text: /^33 %$/ })).toBeTruthy()
+  await ui.unmount()
+})
+
+test('the store keeps ninety days at most', { options: { history: true } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), JAN_2)
+  const old: Record<string, unknown> = {}
+  for (let day = 1; day <= 95; day++) {
+    old[`2098-0${1 + Math.floor((day - 1) / 31)}-${String(1 + ((day - 1) % 31)).padStart(2, '0')}`] = { peaks: {}, input: 0, output: 0 }
+  }
+  let saved: unknown = old
+  on('store.get', () => ({ value: saved }))
+  on('store.set', (_, e) => {
+    saved = e.value
+    return { value: undefined }
+  })
+  await $.session.start(START)
+  await $.session.measure(measureAt(40))
+
+  const days = Object.keys(saved as Record<string, unknown>).sort()
+  expect(days).toHaveLength(90)
+  expect(days.at(-1)).toBe('2099-01-02')
+})
+
+test('a stored value of the wrong shape starts over', { options: { history: true } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), JAN_2)
+  mock.store(on, { 'history-v1': 'oops' })
+  await $.session.start(START)
+
+  const ui = await $.ui.mount(PANE())
+  expect(await ui.find({ type: 'Text', text: 'Pas encore de données.' })).toBeTruthy()
+  await ui.unmount()
+})
+
+test('the pane speaks English, month first', { options: { history: true, language: 'en' } }, async ($, on) => {
+  const { commands, opened } = engine(on, 'claude-opus-5-5', limitsAt(50, 20), JAN_2)
+  mock.store(on)
+  await $.session.start(START)
+  expect(opened).toEqual(['usage-limits-history:History'])
+  expect(commands).toContain('limits-history')
+  await $.session.measure(measureAt(60))
+  await $.turn.complete(turn('t1', USAGE(1500, 300)))
+
+  const ui = await $.ui.mount(PANE())
+  expect(await ui.find({ type: 'Text', text: /^01\/02$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^60%$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^↓1\.5 k ↑300$/ })).toBeTruthy()
+  await ui.unmount()
+})
+
+test('band and pane draw on every surface, at every width', { options: { history: true, language: 'en', resetFormat: 'clock' } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5', [...limitsAt(90, 20), { kind: 'spend_limit', percentUsed: 104 }], JAN_2)
+  mock.store(on)
+  await $.session.start(START)
+  await $.session.measure(measureAt(60))
+  await $.turn.complete(turn('t1', USAGE(1500, 300)))
+
+  for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
+    for (const columns of [1, 20, 33, 50, 70, 100, 200]) {
+      const bandUi = await $.ui.mount({ ...BAND, surface, props: { ...BAND.props, bodyColumns: columns } })
+      expect(await bandUi.drawn()).toBeTruthy()
+      await bandUi.unmount()
+      const paneUi = await $.ui.mount({ ...PANE(columns), surface })
+      expect(await paneUi.drawn()).toBeTruthy()
+      await paneUi.unmount()
+    }
+  }
+})
+
+test('a narrow pane drops its bars, then keeps the figures',{ options: { history: true } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), JAN_2)
+  mock.store(on)
+  await $.session.start(START)
+  await $.session.measure(measureAt(60))
+
+  const ui = await $.ui.mount(PANE(30))
+  expect(await ui.find({ type: 'Text', text: /^60 %$/ })).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /━|╌/ })).toBeFalsy()
   await ui.unmount()
 })
 

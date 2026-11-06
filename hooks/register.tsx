@@ -1,7 +1,10 @@
 import { atom, read, update } from 'claude-code'
-import type { Register } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
 
-import type { ContextFill, Limit, TokenCount } from '../types'
+import type { ContextFill, History, Limit, TokenCount } from '../types'
+import { addPeaks, addTokens, dayKey, HISTORY_KEY, newestDays, readHistory } from './history'
+import { SETTINGS_FR, STRINGS } from './strings'
+import type { Verdict } from './strings'
 
 const NO_TOKENS: TokenCount = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
 
@@ -13,12 +16,10 @@ const modelAtom = atom({ plugin: 'usage-limits', key: 'model' } as const, '')
 const lastTurnAtom = atom({ plugin: 'usage-limits', key: 'lastTurn' } as const, null as TokenCount | null)
 const sessionTokensAtom = atom({ plugin: 'usage-limits', key: 'sessionTokens' } as const, NO_TOKENS)
 const contextAtom = atom({ plugin: 'usage-limits', key: 'context' } as const, null as ContextFill | null)
+const historyAtom = atom({ plugin: 'usage-limits', key: 'history' } as const, {} as History)
 
-const LABELS: Record<string, string> = {
-  five_hour: '5 h',
-  seven_day: '7 j',
-  spend_limit: 'Budget',
-}
+const HISTORY_PANE = 'usage-limits-history'
+const CONFIG_PREFIX = 'usage-limits.'
 
 // Length of each window, to know how far into it we are.
 const WINDOW_MS: Record<string, number> = {
@@ -33,30 +34,18 @@ const bar = (percent: number, elapsed: number | null, cells: number) => {
   return Array.from({ length: cells }, (_, i) => ({ isTick: i === tick, isFilled: i < filled }))
 }
 
-type Verdict = 'push' | 'steady' | 'slow' | 'limit'
-
 // One look per verdict: the accent colour (a raw colour, so the card keeps its tint
-// on any theme) and the word, the glyph drawn in the icon and the terminal fallback.
-const VERDICTS: Record<Verdict, { label: string; accent: string; glyph: string }> = {
-  push: { label: 'Pousser', accent: '#2F7D57', glyph: '↑' },
-  steady: { label: 'Rythme normal', accent: '#2F6FDE', glyph: '=' },
-  slow: { label: 'Ralentir', accent: '#B8570F', glyph: '↓' },
-  limit: { label: 'Limite proche', accent: '#B3262B', glyph: '!' },
-}
-
-const RESET_NAMES: Record<string, string> = {
-  five_hour: 'session',
-  seven_day: 'semaine',
-  spend_limit: 'budget',
+// on any theme) and the glyph drawn as the terminal's icon.
+const VERDICTS: Record<Verdict, { accent: string; glyph: string }> = {
+  push: { accent: '#2F7D57', glyph: '↑' },
+  steady: { accent: '#2F6FDE', glyph: '=' },
+  slow: { accent: '#B8570F', glyph: '↓' },
+  limit: { accent: '#B3262B', glyph: '!' },
 }
 
 // A window per model (`seven_day_fable`, `seven_day_opus`...) is shown like the two known ones:
 // its label is the model's name, and it keeps the length of the window it narrows.
 const modelOf = (kind: string) => /^(?:five_hour|seven_day)_(.+)$/.exec(kind)?.[1]
-const labelOf = (kind: string) => {
-  const model = modelOf(kind)
-  return LABELS[kind] ?? (model ? model.charAt(0).toUpperCase() + model.slice(1).replace(/_/g, ' ') : kind)
-}
 const windowLength = (kind: string) =>
   WINDOW_MS[kind] ?? (kind.startsWith('five_hour_') ? WINDOW_MS.five_hour : kind.startsWith('seven_day_') ? WINDOW_MS.seven_day : undefined)
 // The general window a kind narrows: `seven_day_fable` is a `seven_day`.
@@ -78,16 +67,7 @@ const forModel = (limits: Limit[], model: string) => {
 const current = (l: Limit, now: number): Limit =>
   l.resetsAt && Date.parse(l.resetsAt) <= now ? { kind: l.kind, percentUsed: 0 } : l
 
-// Token counts the French way: 950, 2 k, 1,5 k, 12 k, 1,25 M (no trailing zeros).
-const fmtTokens = (n: number) => {
-  const short = (value: number, digits: number) => String(Number(value.toFixed(digits))).replace('.', ',')
-  if (n < 1000) return String(n)
-  // From 999 500 the thousands would round to « 1000 k ».
-  if (n < 999_500) return `${short(n / 1000, n < 10_000 ? 1 : 0)} k`
-  return `${short(n / 1_000_000, n < 10_000_000 ? 2 : 1)} M`
-}
-
-const addTokens = (a: TokenCount, b: TokenCount): TokenCount => ({
+const addTokenCounts = (a: TokenCount, b: TokenCount): TokenCount => ({
   input: a.input + b.input,
   output: a.output + b.output,
   cacheRead: a.cacheRead + b.cacheRead,
@@ -134,28 +114,77 @@ const barSvg = (percent: number, accent: string, elapsed: number | null, width: 
   )
 }
 
-const resetIn = (iso: string | undefined, now: number) => {
-  if (!iso) return ''
-  const minutes = Math.max(0, Math.round((Date.parse(iso) - now) / 60000))
-  if (minutes < 60) return `${minutes} min`
-  const hours = Math.floor(minutes / 60)
-  return hours < 24 ? `${hours} h ${String(minutes % 60).padStart(2, '0')}` : `${Math.floor(hours / 24)} j ${hours % 24} h`
+// One change to the history at a time: each reads the store again, so two sessions
+// open side by side add up, and a failed write never gets in the way of a turn.
+let historyWrites: Promise<void> = Promise.resolve()
+const recordHistory = ($: EngineInterface, change: (history: History, day: string) => History) => {
+  historyWrites = historyWrites
+    .then(async () => {
+      const now = await $.clock.now()
+      const history = change(readHistory(await $.store.get(HISTORY_KEY)), dayKey(now))
+      await $.store.set(HISTORY_KEY, history)
+      await update($, historyAtom, () => history)
+    })
+    .catch(() => undefined)
+  return historyWrites
 }
 
 export const register: Register = (on, options) => {
+  const language = options.language === 'en' ? 'en' : 'fr'
+  const t = STRINGS[language]
   const windows = String(options.windows)
   const warnAt = Number(options.warnAt)
   const cautionAt = Number(options.cautionAt)
   const paceMargin = Number(options.paceMargin)
   const showDelta = options.showDelta === true
   const showReset = options.showReset === true
+  const resetAsClock = options.resetFormat === 'clock'
+  const showForecast = options.showForecast !== false
   const showPaceMark = options.showPaceMark !== false
   const isCompact = options.isCompact === true
   const layout = String(options.layout)
   const showTokens = options.showTokens !== false
+  const hasHistory = options.history === true
   const barHeight = Math.max(2, Math.min(20, Number(options.barHeight) || 6))
   const rawPadding = Number(options.bandPadding)
   const bandPadding = Number.isFinite(rawPadding) ? Math.max(0, Math.min(3, Math.round(rawPadding))) : 1
+
+  const percentOf = (value: number) => t.percent(Math.round(value))
+
+  const labelOf = (kind: string) => {
+    const model = modelOf(kind)
+    return t.labels[kind] ?? (model ? model.charAt(0).toUpperCase() + model.slice(1).replace(/_/g, ' ') : kind)
+  }
+
+  // Token counts in the language's way: 950, 2 k, 1,5 k, 12 k, 1,25 M (no trailing zeros).
+  const fmtTokens = (n: number) => {
+    const short = (value: number, digits: number) => String(Number(value.toFixed(digits))).replace('.', t.decimal)
+    if (n < 1000) return String(n)
+    // From 999 500 the thousands would round to « 1000 k ».
+    if (n < 999_500) return `${short(n / 1000, n < 10_000 ? 1 : 0)} k`
+    return `${short(n / 1_000_000, n < 10_000_000 ? 2 : 1)} M`
+  }
+
+  const fmtMinutes = (minutes: number) => {
+    if (minutes < 60) return `${minutes} min`
+    const hours = Math.floor(minutes / 60)
+    return hours < 24 ? `${hours} h ${String(minutes % 60).padStart(2, '0')}` : `${Math.floor(hours / 24)} ${t.dayUnit} ${hours % 24} h`
+  }
+
+  const timeLeft = (iso: string, now: number) => fmtMinutes(Math.max(0, Math.round((Date.parse(iso) - now) / 60000)))
+
+  // The reset's time on the person's clock, with the weekday when it isn't today.
+  const clockAt = (iso: string, now: number) => {
+    const at = new Date(iso)
+    const time = `${t.at} ${t.clock(at.getHours(), String(at.getMinutes()).padStart(2, '0'))}`
+    return at.toDateString() === new Date(now).toDateString() ? time : `${t.weekdays[at.getDay()]} ${time}`
+  }
+
+  // As the reset line writes it: « 1 h 15 » or « à 18 h 40 ».
+  const resetShort = (iso: string, now: number) => (resetAsClock ? clockAt(iso, now) : timeLeft(iso, now))
+  // As a sentence writes it: « reset dans 1 h 15 » or « reset à 18 h 40 ».
+  const resetPhrase = (iso: string, now: number) =>
+    `${t.resets} ${resetAsClock ? clockAt(iso, now) : `${t.inWord} ${timeLeft(iso, now)}`}`
 
   // A bar's colour follows its own usage: red, then orange. Under both it takes the
   // verdict's, or the calm blue when the verdict is another window's limit.
@@ -180,6 +209,29 @@ export const register: Register = (on, options) => {
     if (delta > paceMargin) return { glyph: '↑', delta, elapsed }
     if (delta < -paceMargin) return { glyph: '↓', delta, elapsed }
     return { glyph: '→', delta, elapsed }
+  }
+
+  // Minutes before the window fills up if usage keeps its pace, when that comes before the
+  // reset. Nothing in the window's first tenth, when one big request would skew the pace.
+  const minutesToLimit = (l: Limit, now: number) => {
+    const length = windowLength(l.kind)
+    if (!length || !l.resetsAt || l.percentUsed <= 0 || l.percentUsed >= 100) return null
+
+    const left = Math.min(length, Math.max(0, Date.parse(l.resetsAt) - now))
+    const elapsed = length - left
+    if (elapsed < length * 0.1) return null
+
+    const toLimit = ((100 - l.percentUsed) / l.percentUsed) * elapsed
+    return toLimit < left ? Math.round(toLimit / 60000) : null
+  }
+
+  const forecastLine = (limits: Limit[], now: number) => {
+    if (!showForecast) return ''
+    const parts = limits.flatMap(l => {
+      const minutes = minutesToLimit(l, now)
+      return minutes === null ? [] : [t.forecastLimit(labelOf(l.kind), fmtMinutes(minutes))]
+    })
+    return parts.length > 0 ? t.forecast + parts.join(' · ') : ''
   }
 
   // Close to a limit always wins. Otherwise the 5-hour window sets the verdict; the
@@ -215,10 +267,14 @@ export const register: Register = (on, options) => {
       .filter(isShown)
       .filter(l => l.percentUsed >= warnAt && !warned.includes(`${l.kind}:${l.resetsAt ?? ''}`))
     for (const l of reached) {
-      $.ui.toast(`Limite ${labelOf(l.kind)} à ${Math.round(l.percentUsed)}%`)
+      $.ui.toast(t.toast(labelOf(l.kind), percentOf(l.percentUsed)))
     }
     if (reached.length > 0) {
       await update($, warnedAtom, () => [...warned, ...reached.map(l => `${l.kind}:${l.resetsAt ?? ''}`)])
+    }
+
+    if (hasHistory && e.rateLimits.length > 0) {
+      await recordHistory($, (history, day) => addPeaks(history, day, e.rateLimits))
     }
 
     return next(e)
@@ -226,23 +282,28 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     $.ui.status(undefined)
+    // The menu caches its labels, and the language may just have changed.
+    $.ui.invalidate('config.describe')
     // Time passes between replies: this write redraws the band, its tick and its time left.
     $.clock.every(60_000, () => {
       void update($, tickAtom, count => (count ?? 0) + 1)
     })
-    await $.command.register({
-      name: 'limites',
-      description: 'Show the usage limits in detail and bring the band back',
-    })
-    await $.command.register({
-      name: 'limites-masquer',
-      description: 'Hide the usage limits band (/limites brings it back)',
-    })
+    await $.command.register({ name: t.commands.show, description: t.commandHelp.show })
+    await $.command.register({ name: t.commands.hide, description: t.commandHelp.hide })
     await $.command.register({
       name: 'usage-limits-config',
-      description: 'Show or change the usage-limits settings',
-      argumentHint: '[réglage=valeur]',
+      description: t.commandHelp.config,
+      argumentHint: t.configHint,
     })
+    if (hasHistory) {
+      await $.command.register({ name: t.commands.history, description: t.commandHelp.history })
+      const stored = readHistory(await $.store.get(HISTORY_KEY))
+      await update($, historyAtom, () => stored)
+      void $.ui.open({ id: HISTORY_PANE, title: t.historyTitle }).catch(() => undefined)
+    } else {
+      // The option was just turned off: the pane goes with it. What was recorded stays.
+      void $.ui.close({ id: HISTORY_PANE }).catch(() => undefined)
+    }
     const { rateLimits, context } = await $.session.usage()
     await update($, limitsAtom, () => [...rateLimits])
     await update($, contextAtom, () => ({ tokens: context.tokens, window: context.window, percent: context.percent }))
@@ -272,8 +333,11 @@ export const register: Register = (on, options) => {
         cacheRead: u.cache_read_input_tokens,
         cacheWrite: u.cache_creation_input_tokens,
       }
-      await update($, sessionTokensAtom, total => addTokens(total ?? NO_TOKENS, turn))
+      await update($, sessionTokensAtom, total => addTokenCounts(total ?? NO_TOKENS, turn))
       if (e.agentId === undefined) await update($, lastTurnAtom, () => turn)
+      if (hasHistory) {
+        await recordHistory($, (history, day) => addTokens(history, day, turn.input - turn.cacheRead, turn.output))
+      }
     }
     return result
   })
@@ -289,52 +353,54 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // The manifest's labels are English: in French, the /config menu reads from our table.
+  if (language === 'fr') {
+    on('config.describe', async ($, e, next) => {
+      const field = e.key.startsWith(CONFIG_PREFIX) ? SETTINGS_FR[e.key.slice(CONFIG_PREFIX.length)] : undefined
+      return next(field ? { ...e, ...field } : e)
+    })
+  }
+
   // The mod's own settings, apart from /config: no argument lists them, `name=value` changes one.
   on('command.run', { command: 'usage-limits-config' }, async ($, e) => {
-    const prefix = 'usage-limits.'
-    const rows = (await $.config.list()).filter(r => r.key.startsWith(prefix))
+    const rows = (await $.config.list()).filter(r => r.key.startsWith(CONFIG_PREFIX))
     const describe = (r: (typeof rows)[number]) =>
-      `${r.key.slice(prefix.length)} = ${String(r.value)}${r.options ? ` (${r.options.join(' | ')})` : ''}`
+      `${r.key.slice(CONFIG_PREFIX.length)} = ${String(r.value)}${r.options ? ` (${r.options.join(' | ')})` : ''}`
     const args = e.args.trim()
 
     if (!args) {
-      return {
-        text: [
-          'Réglages de usage-limits (change avec /usage-limits-config réglage=valeur) :',
-          ...rows.map(describe),
-        ].join('\n'),
-      }
+      return { text: [t.configHeader, ...rows.map(describe)].join('\n') }
     }
 
     const at = args.indexOf('=')
     const name = (at < 0 ? args : args.slice(0, at)).trim()
     const raw = at < 0 ? '' : args.slice(at + 1).trim()
-    const row = rows.find(r => r.key === prefix + name)
-    if (!row) return { text: `Réglage inconnu : ${name}\n${rows.map(describe).join('\n')}` }
+    const row = rows.find(r => r.key === CONFIG_PREFIX + name)
+    if (!row) return { text: `${t.configUnknown(name)}\n${rows.map(describe).join('\n')}` }
     if (at < 0) return { text: describe(row) }
 
     let value: boolean | number | string = raw
     if (row.kind === 'boolean') {
-      if (/^(true|on|oui|1)$/i.test(raw)) value = true
-      else if (/^(false|off|non|0)$/i.test(raw)) value = false
-      else return { text: `${name} attend true ou false.` }
+      if (/^(true|on|oui|yes|1)$/i.test(raw)) value = true
+      else if (/^(false|off|non|no|0)$/i.test(raw)) value = false
+      else return { text: t.configBoolean(name) }
     } else if (row.kind === 'number') {
       value = Number(raw)
-      if (raw === '' || !Number.isFinite(value)) return { text: `${name} attend un nombre.` }
+      if (raw === '' || !Number.isFinite(value)) return { text: t.configNumber(name) }
     } else if (row.options && !row.options.includes(raw)) {
-      return { text: `${name} attend : ${row.options.join(' | ')}` }
+      return { text: t.configChoice(name, row.options.join(' | ')) }
     }
 
     const result = await $.config.set({ key: row.key, value })
-    return { text: result.deny ? `Refusé : ${result.deny}` : `${name} = ${String(value)}` }
+    return { text: result.deny ? t.configDenied(result.deny) : `${name} = ${String(value)}` }
   })
 
-  on('command.run', { command: 'limites-masquer' }, async $ => {
+  on('command.run', { command: t.commands.hide }, async $ => {
     await update($, isHiddenAtom, () => true)
-    return { text: 'Band hidden. /limites brings it back.' }
+    return { text: t.hidden }
   })
 
-  on('command.run', { command: 'limites' }, async $ => {
+  on('command.run', { command: t.commands.show }, async $ => {
     await update($, isHiddenAtom, () => false)
     let limits = await read($, limitsAtom)
     if (limits.length === 0) {
@@ -345,31 +411,32 @@ export const register: Register = (on, options) => {
     const now = await $.clock.now()
 
     if (limits.length === 0) {
-      return { text: 'No usage figure reported yet.' }
+      return { text: t.noFigures }
     }
 
-    const lines = limits.map(reported => {
-      const l = current(reported, now)
+    const live = limits.map(l => current(l, now))
+    const lines = live.map(l => {
       const p = pace(l, now)
-      const reset = resetIn(l.resetsAt, now)
-      const gap = p ? ` (${p.delta >= 0 ? '+' : ''}${p.delta} pts vs time, ${p.glyph})` : ''
-      return `${labelOf(l.kind)} (${l.kind}): ${Math.round(l.percentUsed)}%${reset ? `, resets in ${reset}` : ''}${gap}`
+      const reset = l.resetsAt ? `, ${resetPhrase(l.resetsAt, now)}` : ''
+      const gap = p ? ` (${t.vsTime(`${p.delta >= 0 ? '+' : ''}${p.delta}`, p.glyph)})` : ''
+      return `${labelOf(l.kind)} (${l.kind})${t.colon}${percentOf(l.percentUsed)}${reset}${gap}`
     })
+    const forecast = forecastLine(live, now)
 
     const model = await read($, modelAtom)
     const last = await read($, lastTurnAtom)
     const total = await read($, sessionTokensAtom)
     const context = await read($, contextAtom)
     const shown = forModel(limits, model).map(l => labelOf(l.kind)).join(', ')
-    const cached = (t: TokenCount) => (t.cacheRead || t.cacheWrite ? ` (dont cache lu ${fmtTokens(t.cacheRead)}, écrit ${fmtTokens(t.cacheWrite)})` : '')
+    const cached = (c: TokenCount) => (c.cacheRead || c.cacheWrite ? ` (${t.cached(fmtTokens(c.cacheRead), fmtTokens(c.cacheWrite))})` : '')
     const tokenLines = [
-      ...(model ? [`Modèle : ${model} (bande : ${shown})`] : []),
-      ...(last ? [`Dernier tour : entrée ${fmtTokens(last.input)}${cached(last)}, sortie ${fmtTokens(last.output)}`] : []),
-      `Session : entrée ${fmtTokens(total.input)}${cached(total)}, sortie ${fmtTokens(total.output)}`,
-      ...(context?.tokens !== undefined ? [`Contexte : ${fmtTokens(context.tokens)} / ${fmtTokens(context.window)} (${context.percent ?? 0} %)`] : []),
+      ...(model ? [t.model(model, shown)] : []),
+      ...(last ? [`${t.lastTurn}${t.colon}${t.input} ${fmtTokens(last.input)}${cached(last)}, ${t.output} ${fmtTokens(last.output)}`] : []),
+      `${t.session}${t.colon}${t.input} ${fmtTokens(total.input)}${cached(total)}, ${t.output} ${fmtTokens(total.output)}`,
+      ...(context?.tokens !== undefined ? [`${t.context}${t.colon}${fmtTokens(context.tokens)} / ${fmtTokens(context.window)} (${t.percent(context.percent ?? 0)})`] : []),
     ]
 
-    return { text: [...lines, '', ...tokenLines].join('\n') }
+    return { text: [...lines, ...(forecast ? [forecast] : []), '', ...tokenLines].join('\n') }
   })
 
   // The line under the band: the last turn, the session's totals, the context fill.
@@ -378,13 +445,13 @@ export const register: Register = (on, options) => {
     if (!last && total.input === 0 && context?.tokens === undefined) return ''
     const parts: string[] = []
     if (isShort) {
-      if (last) parts.push(`Tour ↓${fmtTokens(last.input)} ↑${fmtTokens(last.output)}`)
-      parts.push(`Session ↓${fmtTokens(total.input)} ↑${fmtTokens(total.output)}`)
-      if (context?.percent !== undefined) parts.push(`Ctx ${context.percent} %`)
+      if (last) parts.push(`${t.turnShort} ↓${fmtTokens(last.input)} ↑${fmtTokens(last.output)}`)
+      parts.push(`${t.session} ↓${fmtTokens(total.input)} ↑${fmtTokens(total.output)}`)
+      if (context?.percent !== undefined) parts.push(`${t.contextShort} ${t.percent(context.percent)}`)
     } else {
-      if (last) parts.push(`Dernier tour : entrée ${fmtTokens(last.input)}, sortie ${fmtTokens(last.output)}`)
-      parts.push(`Session : entrée ${fmtTokens(total.input)}, sortie ${fmtTokens(total.output)}`)
-      if (context?.tokens !== undefined) parts.push(`Contexte : ${fmtTokens(context.tokens)} / ${fmtTokens(context.window)} (${context.percent ?? 0} %)`)
+      if (last) parts.push(`${t.lastTurn}${t.colon}${t.input} ${fmtTokens(last.input)}, ${t.output} ${fmtTokens(last.output)}`)
+      parts.push(`${t.session}${t.colon}${t.input} ${fmtTokens(total.input)}, ${t.output} ${fmtTokens(total.output)}`)
+      if (context?.tokens !== undefined) parts.push(`${t.context}${t.colon}${fmtTokens(context.tokens)} / ${fmtTokens(context.window)} (${t.percent(context.percent ?? 0)})`)
     }
     return parts.join(' · ')
   }
@@ -397,9 +464,9 @@ export const register: Register = (on, options) => {
   }
 
   const tipFor = (l: Limit, p: ReturnType<typeof pace>, now: number) => {
-    const parts = [`${labelOf(l.kind)} : ${Math.round(l.percentUsed)} % consommé`]
-    if (p) parts.push(`${Math.round(p.elapsed)} % du temps écoulé (repère noir)`)
-    if (l.resetsAt) parts.push(`reset dans ${resetIn(l.resetsAt, now)}`)
+    const parts = [t.tipUsed(labelOf(l.kind), percentOf(l.percentUsed))]
+    if (p) parts.push(t.tipElapsed(percentOf(p.elapsed)))
+    if (l.resetsAt) parts.push(resetPhrase(l.resetsAt, now))
     return parts.join(' · ')
   }
 
@@ -426,15 +493,16 @@ export const register: Register = (on, options) => {
     const barWidth = mode === 'narrow' && hasWidth && columns <= 69 && columns >= 50 ? Math.round(fitWidth * 0.65) : fitWidth
 
     const resets = limits
-      .map(l => (l.resetsAt ? `${RESET_NAMES[l.kind] ?? labelOf(l.kind).toLowerCase()} ${resetIn(l.resetsAt, now)}` : ''))
+      .map(l => (l.resetsAt ? `${t.resetNames[l.kind] ?? labelOf(l.kind).toLowerCase()} ${resetShort(l.resetsAt, now)}` : ''))
       .filter(Boolean)
       .join(' · ')
+    const forecast = forecastLine(limits, now)
     const tokens = showTokens
       ? tokensLine(await read($, lastTurnAtom), await read($, sessionTokensAtom), await read($, contextAtom), isStacked)
       : ''
 
     // A long prompt leaves the band few rows (maxRows): a taller tree would scroll or be cut.
-    // Drop the extras one by one (tokens line, reset line, vertical padding, border), then hide.
+    // Drop the extras one by one (tokens line, reset line, forecast, vertical padding, border), then hide.
     const contentRows = isTiny ? limits.length : 1
     const hasRoom = typeof e.props.maxRows === 'number' && Number.isFinite(e.props.maxRows)
     const rows = hasRoom ? e.props.maxRows : Infinity
@@ -442,9 +510,11 @@ export const register: Register = (on, options) => {
     // A line wider than the band, less its side padding, wraps and takes more rows.
     const lineColumns = hasWidth ? Math.max(1, columns - 4) : Infinity
     const rowsOf = (text: string) => Math.max(1, Math.ceil(text.length / lineColumns))
-    const resetLine = `Reset : ${resets}`
-    const hasResetLine = showReset && resets !== '' && rows >= fullCard + rowsOf(resetLine)
-    const hasTokenLine = tokens !== '' && rows >= fullCard + (hasResetLine ? rowsOf(resetLine) : 0) + rowsOf(tokens)
+    const resetLine = `${t.resetLine}${resets}`
+    const hasForecastLine = forecast !== '' && rows >= fullCard + rowsOf(forecast)
+    const forecastRows = hasForecastLine ? rowsOf(forecast) : 0
+    const hasResetLine = showReset && resets !== '' && rows >= fullCard + forecastRows + rowsOf(resetLine)
+    const hasTokenLine = tokens !== '' && rows >= fullCard + forecastRows + (hasResetLine ? rowsOf(resetLine) : 0) + rowsOf(tokens)
     const hasPadding = bandPadding > 0 && rows >= fullCard
     const hasBorder = rows >= contentRows + 2
     if (rows < contentRows) {
@@ -461,7 +531,8 @@ export const register: Register = (on, options) => {
     const cellCount = mode === 'wide' ? 24 : mode === 'medium' ? 16 : 8
 
     const verdict = verdictOf(limits, now)
-    const { label, accent, glyph } = VERDICTS[verdict]
+    const { accent, glyph } = VERDICTS[verdict]
+    const label = t.verdicts[verdict]
 
     return (
       <Box flexDirection="column" gap={0} alignItems="stretch">
@@ -496,7 +567,7 @@ export const register: Register = (on, options) => {
                 {isCompact ? null : Svg ? (
                   <Svg
                     source={barSvg(l.percentUsed, barAccent, markAt, barWidth, barHeight, tipFor(l, p, now))}
-                    alt={`${labelOf(l.kind)} : ${Math.round(l.percentUsed)} %`}
+                    alt={`${labelOf(l.kind)}${t.colon}${percentOf(l.percentUsed)}`}
                     isInteractive
                     width={barWidth}
                     height={barBoxHeight(barHeight)}
@@ -510,12 +581,17 @@ export const register: Register = (on, options) => {
                     ))}
                   </Text>
                 )}
-                {isStacked ? <Box minWidth={5} justifyContent="flex-end"><Text weight="bold" color={isTerminal ? barAccent : undefined}>{Math.round(l.percentUsed)} %</Text></Box> : <Text weight="bold" color={isTerminal ? barAccent : undefined}>{Math.round(l.percentUsed)} %</Text>}
+                {isStacked ? <Box minWidth={5} justifyContent="flex-end"><Text weight="bold" color={isTerminal ? barAccent : undefined}>{percentOf(l.percentUsed)}</Text></Box> : <Text weight="bold" color={isTerminal ? barAccent : undefined}>{percentOf(l.percentUsed)}</Text>}
                 {p && showDelta ? <Text color={barAccent} size="footnote">{p.delta >= 0 ? '+' : ''}{p.delta}</Text> : null}
               </Box>
             )
           })}
         </Box>
+        {hasForecastLine ? (
+          <Box paddingX={2}>
+            <Text color={VERDICTS.slow.accent} size="footnote">{forecast}</Text>
+          </Box>
+        ) : null}
         {hasResetLine ? (
           <Box justifyContent="space-between" flexDirection={isStacked ? 'column' : 'row'} paddingX={2}>
             <Text dimColor size="footnote">{resetLine}</Text>
@@ -529,4 +605,53 @@ export const register: Register = (on, options) => {
       </Box>
     )
   })
+
+  if (hasHistory) {
+    on('command.run', { command: t.commands.history }, async $ => {
+      await $.ui.open({ id: HISTORY_PANE, title: t.historyTitle })
+      return { text: t.historyOpened }
+    })
+
+    // A row per day, newest first: each limit's peak and the day's tokens. A bar for the
+    // limits only where the pane has the room; the figures stay at any width.
+    on('ui.render', { component: 'Pane', requestId: HISTORY_PANE }, async ($, e) => {
+      const { Box, Text } = $.ui.resolve(e)
+      const history = await read($, historyAtom)
+      const columns = e.props.bodyColumns
+      const cells = columns >= 70 ? 8 : columns >= 50 ? 4 : 0
+      const room = Math.max(1, (e.viewport?.rows ?? 24) - 3)
+      const days = newestDays(history, room)
+
+      if (days.length === 0) {
+        return <Text dimColor>{t.historyEmpty}</Text>
+      }
+
+      return (
+        <Box flexDirection="column" gap={0}>
+          <Text dimColor size="footnote">{t.historyHint}</Text>
+          {days.map(({ key, day }) => {
+            const [, month = '', date = ''] = key.split('-')
+            return (
+              <Box key={key} gap={2} alignItems="center">
+                <Text bold>{t.historyDate(date, month)}</Text>
+                {Object.entries(day.peaks).map(([kind, peak]) => (
+                  <Box key={kind} gap={1} alignItems="center">
+                    <Text dimColor size="footnote">{labelOf(kind)}</Text>
+                    {cells > 0 ? (
+                      <Text color={accentFor(peak, 'steady')}>
+                        {'━'.repeat(Math.min(cells, Math.round((peak / 100) * cells)))}
+                        {'╌'.repeat(Math.max(0, cells - Math.round((peak / 100) * cells)))}
+                      </Text>
+                    ) : null}
+                    <Text>{percentOf(peak)}</Text>
+                  </Box>
+                ))}
+                {columns >= 50 ? <Text dimColor size="footnote">{`↓${fmtTokens(day.input)} ↑${fmtTokens(day.output)}`}</Text> : null}
+              </Box>
+            )
+          })}
+        </Box>
+      )
+    })
+  }
 }

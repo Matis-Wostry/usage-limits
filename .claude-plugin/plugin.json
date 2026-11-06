@@ -1,9 +1,16 @@
 {
   "name": "usage-limits",
-  "version": "0.12.2",
+  "version": "0.13.0",
   "description": "Shows the 5-hour and weekly usage limits as a band above the prompt, with a pace verdict and the session's tokens.",
   "types": "./types/index.d.ts",
   "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Language",
+      "description": "Language of the band, the commands, the messages and this menu.",
+      "options": ["fr", "en"],
+      "default": "fr"
+    },
     "windows": {
       "type": "string",
       "title": "Windows shown",
@@ -47,11 +54,24 @@
       "description": "Draws the tick on each bar where the clock stands in the window. Off: the bar shows only the usage.",
       "default": true
     },
+    "showForecast": {
+      "type": "boolean",
+      "title": "Forecast the limit",
+      "description": "Writes when the limit will be reached at this pace, if that comes before the reset.",
+      "default": true
+    },
     "showReset": {
       "type": "boolean",
-      "title": "Show the time left",
-      "description": "Writes the time before each window resets.",
+      "title": "Show the reset",
+      "description": "Writes when each window resets.",
       "default": true
+    },
+    "resetFormat": {
+      "type": "string",
+      "title": "Reset format",
+      "description": "duration writes the time left; clock writes the time of the reset.",
+      "options": ["duration", "clock"],
+      "default": "duration"
     },
     "layout": {
       "type": "string",
@@ -86,6 +106,12 @@
       "type": "boolean",
       "title": "Compact style",
       "description": "Drops the bar: only the label and the percentage.",
+      "default": false
+    },
+    "history": {
+      "type": "boolean",
+      "title": "History pane",
+      "description": "Records each limit's daily peak and the tokens, and opens the pane at each session.",
       "default": false
     }
   }
