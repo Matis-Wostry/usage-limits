@@ -265,6 +265,17 @@ test('a line that wraps counts for its rows', async ($, on) => {
   await tall.unmount()
 })
 
+test('the icon and the bars say what they show: an empty alt draws nothing on the desktop', async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+
+  const ui = await $.ui.mount(band('desktop'))
+  const alts = (await ui.findAll({ type: 'Svg' })).filter(s => /consommé|<circle/.test(String(s.props.source))).map(s => s.props.alt)
+  // 50 % used with 75 % of the 5 h window gone: there is room, so the verdict pushes.
+  expect(alts).toEqual(['Pousser', '5 h : 50 %', '7 j : 20 %'])
+  await ui.unmount()
+})
+
 test('near a million, tokens read in millions', async ($, on) => {
   engine(on, 'claude-opus-5-5', limitsAt(5, 5), AT_2245)
   await $.session.start(START)

@@ -456,6 +456,7 @@ export const register: Register = (on, options) => {
     // The terminal has no Svg: it keeps a text icon and the line bar, with no tinted card
     // (a terminal fills any background solid, which hides the coloured text).
     const isTerminal = e.surface === 'terminal'
+    // Each Svg needs a non-empty `alt`: the desktop app draws nothing for an empty one.
     const Svg = !isTerminal && 'Svg' in ui ? ui.Svg : null
     const cellCount = mode === 'wide' ? 24 : mode === 'medium' ? 16 : 8
 
@@ -476,7 +477,7 @@ export const register: Register = (on, options) => {
         >
           {isTiny ? null : <Box gap={2} alignItems="center">
             {Svg ? (
-              <Svg source={iconSvg(verdict, label)} alt="" width={28} height={28} isInteractive />
+              <Svg source={iconSvg(verdict, label)} alt={label} width={28} height={28} isInteractive />
             ) : (
               <Text color={accent} bold>{glyph}</Text>
             )}
@@ -495,7 +496,7 @@ export const register: Register = (on, options) => {
                 {isCompact ? null : Svg ? (
                   <Svg
                     source={barSvg(l.percentUsed, barAccent, markAt, barWidth, barHeight, tipFor(l, p, now))}
-                    alt=""
+                    alt={`${labelOf(l.kind)} : ${Math.round(l.percentUsed)} %`}
                     isInteractive
                     width={barWidth}
                     height={barBoxHeight(barHeight)}

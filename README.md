@@ -72,7 +72,7 @@ Puis tape `/reload-plugins` (ou ouvre une nouvelle session) et envoie un message
 
 ## Où ça s'affiche
 
-La bande s'affiche dans **VS Code**. Elle n'apparaît pas dans l'onglet Code de l'application bureau. Si elle manque, tape `/limites` : une réponse avec des chiffres prouve que le mod est chargé.
+La bande s'affiche dans **VS Code** et dans l'**onglet Code de l'application de bureau**. Après une mise à jour, ouvre une nouvelle session dans l'application : elle ne recharge pas le mod dans une session déjà ouverte. Si la bande manque, tape `/limites` : une réponse avec des chiffres prouve que le mod est chargé.
 
 ## Commandes
 
