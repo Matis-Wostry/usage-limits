@@ -1,7 +1,7 @@
 {
   "name": "usage-limits",
-  "version": "0.12.0",
-  "description": "Shows the 5-hour and weekly usage limits as a band above the prompt, with a pace arrow and the session's tokens.",
+  "version": "0.12.1",
+  "description": "Shows the 5-hour and weekly usage limits as a band above the prompt, with a pace verdict and the session's tokens.",
   "types": "./types/index.d.ts",
   "userConfig": {
     "windows": {
@@ -30,7 +30,7 @@
     "paceMargin": {
       "type": "number",
       "title": "Neutral zone (points)",
-      "description": "Gap between usage and elapsed time under which the arrow stays neutral.",
+      "description": "Gap between usage and elapsed time under which the pace stays normal.",
       "default": 8,
       "min": 0,
       "max": 50
@@ -38,7 +38,7 @@
     "showDelta": {
       "type": "boolean",
       "title": "Show the gap in points",
-      "description": "Writes the pace gap beside the arrow, like ↑ +50.",
+      "description": "Writes the pace gap beside each bar, like +12.",
       "default": false
     },
     "showPaceMark": {
@@ -85,7 +85,7 @@
     "isCompact": {
       "type": "boolean",
       "title": "Compact style",
-      "description": "Drops the bar: only the label, the percentage and the arrow.",
+      "description": "Drops the bar: only the label and the percentage.",
       "default": false
     }
   }

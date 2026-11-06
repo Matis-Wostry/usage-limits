@@ -7,7 +7,8 @@ const NO_TOKENS: TokenCount = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0
 
 const limitsAtom = atom({ plugin: 'usage-limits', key: 'limits' } as const, [] as Limit[])
 const isHiddenAtom = atom({ plugin: 'usage-limits', key: 'isHidden' } as const, false)
-const widthAtom = atom({ plugin: 'usage-limits', key: 'width' } as const, 0)
+const tickAtom = atom({ plugin: 'usage-limits', key: 'tick' } as const, 0)
+const warnedAtom = atom({ plugin: 'usage-limits', key: 'warned' } as const, [] as string[])
 const modelAtom = atom({ plugin: 'usage-limits', key: 'model' } as const, '')
 const lastTurnAtom = atom({ plugin: 'usage-limits', key: 'lastTurn' } as const, null as TokenCount | null)
 const sessionTokensAtom = atom({ plugin: 'usage-limits', key: 'sessionTokens' } as const, NO_TOKENS)
@@ -43,13 +44,6 @@ const VERDICTS: Record<Verdict, { label: string; accent: string; glyph: string }
   limit: { label: 'Limite proche', accent: '#B3262B', glyph: '!' },
 }
 
-const ADVICE: Record<Verdict, string> = {
-  push: 'Vous avez de la marge : lancez une grosse tâche.',
-  steady: 'Vous êtes dans le rythme : continuez normalement.',
-  slow: 'Vous consommez plus vite que le temps : ralentissez un peu.',
-  limit: 'Limite proche : gardez le reste pour l’essentiel.',
-}
-
 const RESET_NAMES: Record<string, string> = {
   five_hour: 'session',
   seven_day: 'semaine',
@@ -80,11 +74,16 @@ const forModel = (limits: Limit[], model: string) => {
   return limits.filter(l => (modelOf(l.kind) === undefined ? !narrowed.has(l.kind) : isSelected(l)))
 }
 
-// Token counts the French way: 950, 2 k, 12,3 k, 1,25 M (no trailing zeros).
+// A window past its reset has started over, whatever the last reply reported.
+const current = (l: Limit, now: number): Limit =>
+  l.resetsAt && Date.parse(l.resetsAt) <= now ? { kind: l.kind, percentUsed: 0 } : l
+
+// Token counts the French way: 950, 2 k, 1,5 k, 12 k, 1,25 M (no trailing zeros).
 const fmtTokens = (n: number) => {
   const short = (value: number, digits: number) => String(Number(value.toFixed(digits))).replace('.', ',')
   if (n < 1000) return String(n)
-  if (n < 1_000_000) return `${short(n / 1000, n < 10_000 ? 1 : 0)} k`
+  // From 999 500 the thousands would round to « 1000 k ».
+  if (n < 999_500) return `${short(n / 1000, n < 10_000 ? 1 : 0)} k`
   return `${short(n / 1_000_000, n < 10_000_000 ? 2 : 1)} M`
 }
 
@@ -158,11 +157,13 @@ export const register: Register = (on, options) => {
   const rawPadding = Number(options.bandPadding)
   const bandPadding = Number.isFinite(rawPadding) ? Math.max(0, Math.min(3, Math.round(rawPadding))) : 1
 
-  const warned = new Set<string>()
-
-  // Theme keys follow the user's theme: calm, then caution, then alert.
-  const colorFor = (percent: number) =>
-    percent >= warnAt ? 'error' : percent >= cautionAt ? 'warning' : 'claude'
+  // A bar's colour follows its own usage: red, then orange. Under both it takes the
+  // verdict's, or the calm blue when the verdict is another window's limit.
+  const accentFor = (percent: number, verdict: Verdict) => {
+    if (percent >= warnAt) return VERDICTS.limit.accent
+    if (percent >= cautionAt) return VERDICTS.slow.accent
+    return VERDICTS[verdict === 'limit' ? 'steady' : verdict].accent
+  }
 
   const isShown = (l: Limit) => windows === 'both' || baseOf(l.kind) === windows || !windowLength(l.kind)
 
@@ -176,9 +177,9 @@ export const register: Register = (on, options) => {
     const elapsed = (1 - left / length) * 100
     const delta = Math.round(elapsed - l.percentUsed)
 
-    if (delta > paceMargin) return { glyph: '↑', color: 'success', delta, elapsed }
-    if (delta < -paceMargin) return { glyph: '↓', color: 'error', delta, elapsed }
-    return { glyph: '→', color: 'subtle', delta, elapsed }
+    if (delta > paceMargin) return { glyph: '↑', delta, elapsed }
+    if (delta < -paceMargin) return { glyph: '↓', delta, elapsed }
+    return { glyph: '→', delta, elapsed }
   }
 
   // Close to a limit always wins. Otherwise the 5-hour window sets the verdict; the
@@ -207,13 +208,17 @@ export const register: Register = (on, options) => {
     await update($, limitsAtom, () => [...e.rateLimits])
     await update($, contextAtom, () => ({ tokens: e.context.tokens, window: e.context.window, percent: e.context.percent }))
 
+    // Kept in the session's state: changing a setting reloads the module, and must not toast again.
     const model = await read($, modelAtom)
-    for (const l of forModel(e.rateLimits, model).filter(isShown)) {
-      const key = `${l.kind}:${l.resetsAt ?? ''}`
-      if (l.percentUsed >= warnAt && !warned.has(key)) {
-        warned.add(key)
-        $.ui.toast(`Limite ${labelOf(l.kind)} à ${Math.round(l.percentUsed)}%`)
-      }
+    const warned = await read($, warnedAtom)
+    const reached = forModel(e.rateLimits, model)
+      .filter(isShown)
+      .filter(l => l.percentUsed >= warnAt && !warned.includes(`${l.kind}:${l.resetsAt ?? ''}`))
+    for (const l of reached) {
+      $.ui.toast(`Limite ${labelOf(l.kind)} à ${Math.round(l.percentUsed)}%`)
+    }
+    if (reached.length > 0) {
+      await update($, warnedAtom, () => [...warned, ...reached.map(l => `${l.kind}:${l.resetsAt ?? ''}`)])
     }
 
     return next(e)
@@ -221,6 +226,10 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     $.ui.status(undefined)
+    // Time passes between replies: this write redraws the band, its tick and its time left.
+    $.clock.every(60_000, () => {
+      void update($, tickAtom, count => (count ?? 0) + 1)
+    })
     await $.command.register({
       name: 'limites',
       description: 'Show the usage limits in detail and bring the band back',
@@ -269,11 +278,13 @@ export const register: Register = (on, options) => {
     return result
   })
 
-  // `/clear` starts the conversation over: so do the counts.
+  // `/clear` and `/resume` leave this conversation: so do the counts. No `session.start`
+  // follows them, and the context's fill comes back with the next reply.
   on('session.end', async ($, e, next) => {
-    if (e.reason === 'clear') {
+    if (e.reason === 'clear' || e.reason === 'resume') {
       await update($, sessionTokensAtom, () => NO_TOKENS)
       await update($, lastTurnAtom, () => null)
+      await update($, contextAtom, () => null)
     }
     return next(e)
   })
@@ -337,7 +348,8 @@ export const register: Register = (on, options) => {
       return { text: 'No usage figure reported yet.' }
     }
 
-    const lines = limits.map(l => {
+    const lines = limits.map(reported => {
+      const l = current(reported, now)
       const p = pace(l, now)
       const reset = resetIn(l.resetsAt, now)
       const gap = p ? ` (${p.delta >= 0 ? '+' : ''}${p.delta} pts vs time, ${p.glyph})` : ''
@@ -357,8 +369,7 @@ export const register: Register = (on, options) => {
       ...(context?.tokens !== undefined ? [`Contexte : ${fmtTokens(context.tokens)} / ${fmtTokens(context.window)} (${context.percent ?? 0} %)`] : []),
     ]
 
-    const width = await read($, widthAtom)
-    return { text: [...lines, '', ...tokenLines, ...(width ? [`Largeur de la bande : ${width} colonnes`] : [])].join('\n') }
+    return { text: [...lines, '', ...tokenLines].join('\n') }
   })
 
   // The line under the band: the last turn, the session's totals, the context fill.
@@ -386,15 +397,18 @@ export const register: Register = (on, options) => {
   }
 
   const tipFor = (l: Limit, p: ReturnType<typeof pace>, now: number) => {
-    const parts = [`${labelOf(l.kind)} :${Math.round(l.percentUsed)} % consommé`]
+    const parts = [`${labelOf(l.kind)} : ${Math.round(l.percentUsed)} % consommé`]
     if (p) parts.push(`${Math.round(p.elapsed)} % du temps écoulé (repère noir)`)
     if (l.resetsAt) parts.push(`reset dans ${resetIn(l.resetsAt, now)}`)
     return parts.join(' · ')
   }
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    // Read so that the minute's tick redraws this band.
+    await read($, tickAtom)
+    const now = await $.clock.now()
     const model = await read($, modelAtom)
-    const limits = forModel(await read($, limitsAtom), model).filter(isShown)
+    const limits = forModel(await read($, limitsAtom), model).filter(isShown).map(l => current(l, now))
 
     if (e.props.hasSurvey || limits.length === 0 || (await read($, isHiddenAtom))) {
       return next(e)
@@ -408,10 +422,9 @@ export const register: Register = (on, options) => {
     const isTiny = mode === 'tiny'
     const isStacked = mode === 'narrow' || isTiny
     const fitWidth = mode === 'wide' ? 120 : mode === 'medium' ? 84 : isTiny && hasWidth ? Math.max(40, Math.min(400, (columns - 15) * 9)) : hasWidth ? Math.max(40, Math.min(400, Math.floor((columns - 9 - limits.length * 7) / limits.length) * 9)) : 150
-    // From 50 to 69 columns the bars keep at most 65 % of the room they could take.
-    const barWidth = hasWidth && columns <= 69 && columns >= 50 ? Math.round(fitWidth * 0.65) : fitWidth
+    // From 50 to 69 columns the narrow bars keep at most 65 % of the room they could take.
+    const barWidth = mode === 'narrow' && hasWidth && columns <= 69 && columns >= 50 ? Math.round(fitWidth * 0.65) : fitWidth
 
-    const now = await $.clock.now()
     const resets = limits
       .map(l => (l.resetsAt ? `${RESET_NAMES[l.kind] ?? labelOf(l.kind).toLowerCase()} ${resetIn(l.resetsAt, now)}` : ''))
       .filter(Boolean)
@@ -426,8 +439,12 @@ export const register: Register = (on, options) => {
     const hasRoom = typeof e.props.maxRows === 'number' && Number.isFinite(e.props.maxRows)
     const rows = hasRoom ? e.props.maxRows : Infinity
     const fullCard = contentRows + 2 + bandPadding * 2
-    const hasResetLine = showReset && resets !== '' && rows >= fullCard + 1
-    const hasTokenLine = tokens !== '' && rows >= fullCard + (hasResetLine ? 1 : 0) + 1
+    // A line wider than the band, less its side padding, wraps and takes more rows.
+    const lineColumns = hasWidth ? Math.max(1, columns - 4) : Infinity
+    const rowsOf = (text: string) => Math.max(1, Math.ceil(text.length / lineColumns))
+    const resetLine = `Reset : ${resets}`
+    const hasResetLine = showReset && resets !== '' && rows >= fullCard + rowsOf(resetLine)
+    const hasTokenLine = tokens !== '' && rows >= fullCard + (hasResetLine ? rowsOf(resetLine) : 0) + rowsOf(tokens)
     const hasPadding = bandPadding > 0 && rows >= fullCard
     const hasBorder = rows >= contentRows + 2
     if (rows < contentRows) {
@@ -448,7 +465,7 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column" gap={0} alignItems="stretch">
         <Box
-          gap={isStacked ? 2 : 3}
+          gap={isTiny && isTerminal ? 0 : isStacked ? 2 : 3}
           flexDirection={isTiny ? 'column' : 'row'}
           paddingX={2}
           paddingY={hasPadding ? bandPadding : 0}
@@ -470,13 +487,14 @@ export const register: Register = (on, options) => {
             const p = pace(l, now)
             const markAt = showPaceMark && p ? p.elapsed : null
             const cells = Svg ? [] : bar(l.percentUsed, markAt, cellCount)
+            const barAccent = accentFor(l.percentUsed, verdict)
 
             return (
               <Box key={l.kind} gap={isStacked ? 1 : 2} alignItems="center" justifyContent={isTiny ? 'space-between' : 'flex-start'}>
                 <Text dimColor size="footnote">{labelOf(l.kind)}</Text>
                 {isCompact ? null : Svg ? (
                   <Svg
-                    source={barSvg(l.percentUsed, accent, markAt, barWidth, barHeight, tipFor(l, p, now))}
+                    source={barSvg(l.percentUsed, barAccent, markAt, barWidth, barHeight, tipFor(l, p, now))}
                     alt=""
                     isInteractive
                     width={barWidth}
@@ -485,21 +503,21 @@ export const register: Register = (on, options) => {
                 ) : (
                   <Text>
                     {cells.map((c, i) => (
-                      <Text key={String(i)} color={c.isTick ? undefined : c.isFilled ? accent : 'subtle'} bold={c.isTick}>
+                      <Text key={String(i)} color={c.isTick ? undefined : c.isFilled ? barAccent : 'subtle'} bold={c.isTick}>
                         {c.isTick ? '┃' : c.isFilled ? '━' : '╌'}
                       </Text>
                     ))}
                   </Text>
                 )}
-                {isStacked ? <Box minWidth={5} justifyContent="flex-end"><Text weight="bold" color={isTerminal ? accent : undefined}>{Math.round(l.percentUsed)} %</Text></Box> : <Text weight="bold" color={isTerminal ? accent : undefined}>{Math.round(l.percentUsed)} %</Text>}
-                {p && showDelta ? <Text color={accent} size="footnote">{p.delta >= 0 ? '+' : ''}{p.delta}</Text> : null}
+                {isStacked ? <Box minWidth={5} justifyContent="flex-end"><Text weight="bold" color={isTerminal ? barAccent : undefined}>{Math.round(l.percentUsed)} %</Text></Box> : <Text weight="bold" color={isTerminal ? barAccent : undefined}>{Math.round(l.percentUsed)} %</Text>}
+                {p && showDelta ? <Text color={barAccent} size="footnote">{p.delta >= 0 ? '+' : ''}{p.delta}</Text> : null}
               </Box>
             )
           })}
         </Box>
         {hasResetLine ? (
           <Box justifyContent="space-between" flexDirection={isStacked ? 'column' : 'row'} paddingX={2}>
-            <Text dimColor size="footnote">Reset : {resets}</Text>
+            <Text dimColor size="footnote">{resetLine}</Text>
           </Box>
         ) : null}
         {hasTokenLine ? (

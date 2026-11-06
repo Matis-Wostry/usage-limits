@@ -10,7 +10,8 @@ declare module 'claude-code' {
     'usage-limits': {
       limits: Limit[]
       isHidden: boolean
-      width: number
+      tick: number
+      warned: string[]
       model: string
       lastTurn: TokenCount | null
       sessionTokens: TokenCount

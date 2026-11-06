@@ -7,7 +7,7 @@ Un mod pour Claude Code qui affiche ta consommation des limites (session de 5 h 
 - **Ralentir** : tu consommes plus vite que le temps ne passe.
 - **Limite proche** : une fenêtre approche du seuil d'alerte.
 
-La fenêtre de 5 h décide du verdict ; la fenêtre de 7 jours ne sert qu'à départager. Le trait noir sur chaque barre marque le temps déjà écoulé dans la fenêtre : colorée en deçà du trait, tu as de la marge ; au-delà, tu consommes trop vite.
+La fenêtre de 5 h décide du verdict ; la fenêtre de 7 jours ne sert qu'à départager. Le trait noir sur chaque barre marque le temps déjà écoulé dans la fenêtre : colorée en deçà du trait, tu as de la marge ; au-delà, tu consommes trop vite. La bande suit l'heure même sans nouvelle réponse : une fenêtre qui a passé son reset repart à 0 %.
 
 ## Installation
 
@@ -82,7 +82,7 @@ La bande s'affiche dans **VS Code**. Elle n'apparaît pas dans l'onglet Code de 
 
 ## Tokens
 
-Sous la bande, une ligne donne les tokens du dernier tour (entrée, sortie), le total de la session (sous-agents compris) et le remplissage du contexte. L'entrée compte aussi la part servie par le cache ; `/limites` détaille cette part. Les totaux partent du chargement du mod et repartent à zéro après `/clear`.
+Sous la bande, une ligne donne les tokens du dernier tour (entrée, sortie), le total de la session (sous-agents compris) et le remplissage du contexte. L'entrée compte aussi la part servie par le cache ; `/limites` détaille cette part. Les totaux partent du début de la session, survivent à un rechargement du mod et repartent à zéro après `/clear` ou `/resume`. La ligne revient avec la réponse suivante.
 
 ## Fable
 
@@ -101,8 +101,8 @@ Trois façons de régler le mod :
 | Paramètre | Valeurs | Défaut | Effet |
 |---|---|---|---|
 | `windows` | `both`, `five_hour`, `seven_day` | `both` | Les limites affichées : les deux, ou seulement la session de 5 h, ou seulement la semaine. |
-| `warnAt` | 1 à 100 (%) | `90` | Seuil d'alerte : à partir de là, la barre passe au rouge, le verdict devient « Limite proche » et une notification s'affiche. |
-| `cautionAt` | 1 à 100 (%) | `70` | Seuil d'attention : à partir de là, la barre passe à l'orange. |
+| `warnAt` | 1 à 100 (%) | `90` | Seuil d'alerte : à partir de là, la barre de cette limite passe au rouge, le verdict devient « Limite proche » et une notification s'affiche. |
+| `cautionAt` | 1 à 100 (%) | `70` | Seuil d'attention : à partir de là, la barre de cette limite passe à l'orange. |
 | `paceMargin` | 0 à 50 (points) | `8` | Zone neutre : tant que l'écart entre la consommation et le temps écoulé reste sous cette valeur, le rythme est « normal ». |
 | `showDelta` | `true`, `false` | `false` | Écrit l'écart en points à côté de chaque barre, par exemple `+12`. |
 | `showPaceMark` | `true`, `false` | `true` | Dessine sur chaque barre le trait qui marque le temps écoulé dans la fenêtre. |
