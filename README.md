@@ -13,22 +13,25 @@ La fenêtre de 5 h décide du verdict ; la fenêtre de 7 jours ne sert qu'à dé
 
 ## Installation
 
-### Avec GitHub (recommandé)
+### Avec le marketplace (recommandé)
 
-Dans une session Claude Code (terminal) :
+Le mod est hébergé sur [git.matis-wostry.com/matis/usage-limits](https://git.matis-wostry.com/matis/usage-limits). Dans une session Claude Code (terminal) :
 
 ```
-/plugin install usage-limits --marketplace Matis-Wostry/usage-limits
+/plugin marketplace add https://git.matis-wostry.com/matis/usage-limits.git
+/plugin install usage-limits@usage-limits
 ```
 
-Réponds `y` pour ajouter le marketplace, puis choisis la portée (utilisateur pour l'avoir partout). Dans l'application bureau, où `/plugin` ne fonctionne pas : clique sur **+** à côté du champ de saisie, **Plugins**, **Add marketplace** avec `Matis-Wostry/usage-limits`, puis **Add plugin**.
+Choisis la portée (utilisateur pour l'avoir partout). Dans l'application bureau, où `/plugin` ne fonctionne pas : clique sur **+** à côté du champ de saisie, **Plugins**, **Add marketplace** avec `https://git.matis-wostry.com/matis/usage-limits.git`, puis **Add plugin**.
+
+> **Installé avant depuis GitHub** (`Matis-Wostry/usage-limits`) ? Ce dépôt n'est plus mis à jour. Retire l'ancien marketplace avec `claude plugin marketplace remove usage-limits`, puis réinstalle avec les deux commandes ci-dessus.
 
 ### Sans le marketplace (dossier local)
 
 1. Récupère le dépôt dans un dossier à toi, par exemple :
 
    ```
-   git clone https://github.com/Matis-Wostry/usage-limits.git D:\mods\usage-limits
+   git clone https://git.matis-wostry.com/matis/usage-limits.git D:\mods\usage-limits
    ```
 
 2. Au choix :
@@ -54,7 +57,7 @@ claude plugin marketplace update usage-limits
 claude plugin update usage-limits@usage-limits
 ```
 
-La première commande récupère la dernière version sur GitHub, la seconde l'installe. Redémarre ensuite Claude Code pour qu'elle s'applique.
+La première commande récupère la dernière version du dépôt, la seconde l'installe. Redémarre ensuite Claude Code pour qu'elle s'applique.
 
 Dans l'application bureau : clique sur **+** à côté du champ de saisie, **Plugins**, rafraîchis le marketplace `usage-limits`, puis mets le plugin à jour.
 

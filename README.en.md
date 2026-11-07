@@ -19,22 +19,25 @@ The mod speaks French by default. To switch it to English once installed:
 
 ## Installation
 
-### With GitHub (recommended)
+### With the marketplace (recommended)
 
-In a Claude Code session (terminal):
+The mod is hosted at [git.matis-wostry.com/matis/usage-limits](https://git.matis-wostry.com/matis/usage-limits). In a Claude Code session (terminal):
 
 ```
-/plugin install usage-limits --marketplace Matis-Wostry/usage-limits
+/plugin marketplace add https://git.matis-wostry.com/matis/usage-limits.git
+/plugin install usage-limits@usage-limits
 ```
 
-Answer `y` to add the marketplace, then pick the scope (user, to have it everywhere). In the desktop app, where `/plugin` does not work: click **+** next to the prompt, **Plugins**, **Add marketplace** with `Matis-Wostry/usage-limits`, then **Add plugin**.
+Pick the scope (user, to have it everywhere). In the desktop app, where `/plugin` does not work: click **+** next to the prompt, **Plugins**, **Add marketplace** with `https://git.matis-wostry.com/matis/usage-limits.git`, then **Add plugin**.
+
+> **Installed earlier from GitHub** (`Matis-Wostry/usage-limits`)? That repository is no longer updated. Remove the old marketplace with `claude plugin marketplace remove usage-limits`, then reinstall with the two commands above.
 
 ### Without the marketplace (local folder)
 
 1. Get the repository in a folder of yours, for example:
 
    ```
-   git clone https://github.com/Matis-Wostry/usage-limits.git D:\mods\usage-limits
+   git clone https://git.matis-wostry.com/matis/usage-limits.git D:\mods\usage-limits
    ```
 
 2. Either:
@@ -60,7 +63,7 @@ claude plugin marketplace update usage-limits
 claude plugin update usage-limits@usage-limits
 ```
 
-The first command fetches the latest version from GitHub, the second installs it. Then restart Claude Code for it to apply.
+The first command fetches the latest version from the repository, the second installs it. Then restart Claude Code for it to apply.
 
 In the desktop app: click **+** next to the prompt, **Plugins**, refresh the `usage-limits` marketplace, then update the plugin.
 
