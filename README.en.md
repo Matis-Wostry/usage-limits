@@ -30,7 +30,7 @@ The mod is hosted at [git.matis-wostry.com/matis/usage-limits](https://git.matis
 
 Pick the scope (user, to have it everywhere). In the desktop app, where `/plugin` does not work: click **+** next to the prompt, **Plugins**, **Add marketplace** with `https://git.matis-wostry.com/matis/usage-limits.git`, then **Add plugin**.
 
-> **Installed earlier from GitHub** (`Matis-Wostry/usage-limits`)? That repository is no longer updated. Remove the old marketplace with `claude plugin marketplace remove usage-limits`, then reinstall with the two commands above.
+> **Installed from GitHub** (`Matis-Wostry/usage-limits`)? That repository stays a mirror of git.matis-wostry.com: updating works as usual. To move to the main source, remove the old marketplace with `claude plugin marketplace remove usage-limits`, then reinstall with the two commands above.
 
 ### Without the marketplace (local folder)
 
