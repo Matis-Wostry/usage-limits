@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { ContextFill, History, Limit, TokenCount } from '../types'
+import type { ContextFill, History, InUse, Limit, TokenCount } from '../types'
 import { addPeaks, addTokens, dayKey, HISTORY_KEY, newestDays, readHistory } from './history'
 import { SETTINGS_FR, STRINGS } from './strings'
 import type { Verdict } from './strings'
@@ -13,6 +13,7 @@ const isHiddenAtom = atom({ plugin: 'usage-limits', key: 'isHidden' } as const, 
 const tickAtom = atom({ plugin: 'usage-limits', key: 'tick' } as const, 0)
 const warnedAtom = atom({ plugin: 'usage-limits', key: 'warned' } as const, [] as string[])
 const modelAtom = atom({ plugin: 'usage-limits', key: 'model' } as const, '')
+const inUseAtom = atom({ plugin: 'usage-limits', key: 'inUse' } as const, null as InUse | null)
 const lastTurnAtom = atom({ plugin: 'usage-limits', key: 'lastTurn' } as const, null as TokenCount | null)
 const sessionTokensAtom = atom({ plugin: 'usage-limits', key: 'sessionTokens' } as const, NO_TOKENS)
 const contextAtom = atom({ plugin: 'usage-limits', key: 'context' } as const, null as ContextFill | null)
@@ -63,6 +64,16 @@ const forModel = (limits: Limit[], model: string) => {
   return limits.filter(l => (modelOf(l.kind) === undefined ? !narrowed.has(l.kind) : isSelected(l)))
 }
 
+// A model's id as `/model` names it: `claude-opus-5-5[1m]` reads « Opus 5.5 (1M) ».
+// An id of another shape (an alias, a custom model) stays as it is.
+const modelName = (id: string) => {
+  const isWide = /\[1m\]$/i.test(id)
+  const match = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/i.exec(id.replace(/\[1m\]$/i, ''))
+  if (!match) return id
+  const [, family = '', major = '', minor] = match
+  return `${family.charAt(0).toUpperCase()}${family.slice(1)} ${major}${minor ? `.${minor}` : ''}${isWide ? ' (1M)' : ''}`
+}
+
 // A window past its reset has started over, whatever the last reply reported.
 const current = (l: Limit, now: number): Limit =>
   l.resetsAt && Date.parse(l.resetsAt) <= now ? { kind: l.kind, percentUsed: 0 } : l
@@ -88,6 +99,32 @@ const iconSvg = (verdict: Verdict, tip: string) =>
   `<g stroke="#fff" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">` +
   ICON_PATHS[verdict] +
   `</g></svg>`
+
+// The pixels a column of the band stands for where bars are drawn as Svg.
+const PX_PER_COLUMN = 9
+
+const childrenOf = (value: unknown): unknown[] =>
+  Array.isArray(value) ? value.flatMap(childrenOf) : value === null || value === undefined || typeof value === 'boolean' ? [] : [value]
+
+// Columns a tree takes on one row, as the band lays it out: a character a column, an Svg its
+// pixels over PX_PER_COLUMN, a row's gaps, its side padding and border; a column Box as wide
+// as its widest child, a Box no narrower than its minWidth.
+const columnsOf = (node: unknown): number => {
+  if (typeof node === 'string' || typeof node === 'number') return [...String(node)].length
+  if (!node || typeof node !== 'object') return 0
+  const { type, props, children } = node as { type?: unknown; props?: Record<string, unknown>; children?: unknown }
+  const p = props ?? {}
+  const kids = childrenOf(children ?? p.children)
+  if (type === 'Svg') return Math.ceil(Number(p.width ?? 0) / PX_PER_COLUMN)
+  if (type === 'Text') return kids.reduce<number>((sum, c) => sum + columnsOf(c), 0)
+  const frame = 2 * Number(p.paddingX ?? 0) + (p.borderStyle ? 2 : 0)
+  const widths = kids.map(columnsOf)
+  const inner =
+    p.flexDirection === 'column'
+      ? Math.max(0, ...widths)
+      : widths.reduce((sum, w) => sum + w, 0) + Number(p.gap ?? 0) * Math.max(0, kids.length - 1)
+  return Math.max(Number(p.minWidth ?? 0), inner + frame)
+}
 
 // The SVG's height for a bar this thick: room for the tick above and below the track.
 const barBoxHeight = (thickness: number) => Math.max(16, thickness + 6)
@@ -144,6 +181,7 @@ export const register: Register = (on, options) => {
   const isCompact = options.isCompact === true
   const layout = String(options.layout)
   const showTokens = options.showTokens !== false
+  const modelPosition = (['reset', 'tokens', 'main', 'line', 'off'] as const).find(p => p === options.modelPosition) ?? 'reset'
   const hasHistory = options.history === true
   const barHeight = Math.max(2, Math.min(20, Number(options.barHeight) || 6))
   const rawPadding = Number(options.bandPadding)
@@ -322,6 +360,16 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // No call reads the effort: each request of the main loop says which model and effort it
+  // goes out with, so an `/effort` or a fallback model shows from the next request.
+  on('turn.step', async function* ($, e, next) {
+    if (e.agentId === undefined) {
+      const inUse: InUse = { model: e.model, effort: e.effort === undefined ? null : String(e.effort) }
+      await update($, inUseAtom, () => inUse)
+    }
+    return yield* next(e)
+  })
+
   // Every turn adds to the session's totals, subagents' too; the main loop's is the last turn.
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
@@ -424,13 +472,14 @@ export const register: Register = (on, options) => {
     const forecast = forecastLine(live, now)
 
     const model = await read($, modelAtom)
+    const effort = (await read($, inUseAtom))?.effort ?? null
     const last = await read($, lastTurnAtom)
     const total = await read($, sessionTokensAtom)
     const context = await read($, contextAtom)
     const shown = forModel(limits, model).map(l => labelOf(l.kind)).join(', ')
     const cached = (c: TokenCount) => (c.cacheRead || c.cacheWrite ? ` (${t.cached(fmtTokens(c.cacheRead), fmtTokens(c.cacheWrite))})` : '')
     const tokenLines = [
-      ...(model ? [t.model(model, shown)] : []),
+      ...(model ? [t.model(model, effort, shown)] : []),
       ...(last ? [`${t.lastTurn}${t.colon}${t.input} ${fmtTokens(last.input)}${cached(last)}, ${t.output} ${fmtTokens(last.output)}`] : []),
       `${t.session}${t.colon}${t.input} ${fmtTokens(total.input)}${cached(total)}, ${t.output} ${fmtTokens(total.output)}`,
       ...(context?.tokens !== undefined ? [`${t.context}${t.colon}${fmtTokens(context.tokens)} / ${fmtTokens(context.window)} (${t.percent(context.percent ?? 0)})`] : []),
@@ -441,8 +490,8 @@ export const register: Register = (on, options) => {
 
   // The line under the band: the last turn, the session's totals, the context fill.
   // Short form for the narrow layouts, where every column counts.
-  const tokensLine = (last: TokenCount | null, total: TokenCount, context: ContextFill | null, isShort: boolean) => {
-    if (!last && total.input === 0 && context?.tokens === undefined) return ''
+  const tokenParts = (last: TokenCount | null, total: TokenCount, context: ContextFill | null, isShort: boolean) => {
+    if (!last && total.input === 0 && context?.tokens === undefined) return []
     const parts: string[] = []
     if (isShort) {
       if (last) parts.push(`${t.turnShort} ↓${fmtTokens(last.input)} ↑${fmtTokens(last.output)}`)
@@ -453,15 +502,23 @@ export const register: Register = (on, options) => {
       parts.push(`${t.session}${t.colon}${t.input} ${fmtTokens(total.input)}, ${t.output} ${fmtTokens(total.output)}`)
       if (context?.tokens !== undefined) parts.push(`${t.context}${t.colon}${fmtTokens(context.tokens)} / ${fmtTokens(context.window)} (${t.percent(context.percent ?? 0)})`)
     }
-    return parts.join(' · ')
+    return parts
   }
 
-  // Wide: everything on one row. Medium: shorter bars. Narrow: icon and both bars on one row. Tiny: no icon, the bars one above the other.
-  // Columns are what the band's column offers; `layout` forces one when it misjudges.
-  const modeFor = (columns: number): 'wide' | 'medium' | 'narrow' | 'tiny' => {
-    if (layout === 'wide' || layout === 'medium' || layout === 'narrow') return layout
+  // Wide: everything on one row. Medium: shorter bars. Narrow: icon and the bars on one row. Tiny: no icon, the bars one above the other.
+  // Columns are what the band's column offers: they set the richest layout the band may take,
+  // and it takes a more compact one while its row does not fit. `layout` forces one when it misjudges.
+  type Mode = 'wide' | 'medium' | 'narrow' | 'tiny'
+  const MODES: readonly Mode[] = ['wide', 'medium', 'narrow', 'tiny']
+  const isForced = layout === 'wide' || layout === 'medium' || layout === 'narrow'
+  const modeFor = (columns: number): Mode => {
+    if (isForced) return layout
     return columns >= 100 ? 'wide' : columns >= 70 ? 'medium' : columns > 32 ? 'narrow' : 'tiny'
   }
+
+  // The first form whose every line fits, else the last resort, which wraps.
+  const firstFitting = (forms: string[][], fits: (text: string) => boolean, fallback: string[]) =>
+    forms.find(lines => lines.every(fits)) ?? fallback
 
   const tipFor = (l: Limit, p: ReturnType<typeof pace>, now: number) => {
     const parts = [t.tipUsed(labelOf(l.kind), percentOf(l.percentUsed))]
@@ -485,41 +542,7 @@ export const register: Register = (on, options) => {
     // write the atom (a write while drawing would redraw again).
     const columns: unknown = e.props.bodyColumns
     const hasWidth = typeof columns === 'number' && Number.isFinite(columns) && columns > 0
-    const mode = hasWidth ? modeFor(columns) : layout === 'medium' || layout === 'narrow' ? layout : 'wide'
-    const isTiny = mode === 'tiny'
-    const isStacked = mode === 'narrow' || isTiny
-    const fitWidth = mode === 'wide' ? 120 : mode === 'medium' ? 84 : isTiny && hasWidth ? Math.max(40, Math.min(400, (columns - 15) * 9)) : hasWidth ? Math.max(40, Math.min(400, Math.floor((columns - 9 - limits.length * 7) / limits.length) * 9)) : 150
-    // From 50 to 69 columns the narrow bars keep at most 65 % of the room they could take.
-    const barWidth = mode === 'narrow' && hasWidth && columns <= 69 && columns >= 50 ? Math.round(fitWidth * 0.65) : fitWidth
-
-    const resets = limits
-      .map(l => (l.resetsAt ? `${t.resetNames[l.kind] ?? labelOf(l.kind).toLowerCase()} ${resetShort(l.resetsAt, now)}` : ''))
-      .filter(Boolean)
-      .join(' · ')
-    const forecast = forecastLine(limits, now)
-    const tokens = showTokens
-      ? tokensLine(await read($, lastTurnAtom), await read($, sessionTokensAtom), await read($, contextAtom), isStacked)
-      : ''
-
-    // A long prompt leaves the band few rows (maxRows): a taller tree would scroll or be cut.
-    // Drop the extras one by one (tokens line, reset line, forecast, vertical padding, border), then hide.
-    const contentRows = isTiny ? limits.length : 1
-    const hasRoom = typeof e.props.maxRows === 'number' && Number.isFinite(e.props.maxRows)
-    const rows = hasRoom ? e.props.maxRows : Infinity
-    const fullCard = contentRows + 2 + bandPadding * 2
-    // A line wider than the band, less its side padding, wraps and takes more rows.
-    const lineColumns = hasWidth ? Math.max(1, columns - 4) : Infinity
-    const rowsOf = (text: string) => Math.max(1, Math.ceil(text.length / lineColumns))
-    const resetLine = `${t.resetLine}${resets}`
-    const hasForecastLine = forecast !== '' && rows >= fullCard + rowsOf(forecast)
-    const forecastRows = hasForecastLine ? rowsOf(forecast) : 0
-    const hasResetLine = showReset && resets !== '' && rows >= fullCard + forecastRows + rowsOf(resetLine)
-    const hasTokenLine = tokens !== '' && rows >= fullCard + forecastRows + (hasResetLine ? rowsOf(resetLine) : 0) + rowsOf(tokens)
-    const hasPadding = bandPadding > 0 && rows >= fullCard
-    const hasBorder = rows >= contentRows + 2
-    if (rows < contentRows) {
-      return next(e)
-    }
+    const ceiling: Mode = hasWidth ? modeFor(columns) : layout === 'medium' || layout === 'narrow' ? layout : 'wide'
 
     const ui = $.ui.resolve(e)
     const { Box, Text } = ui
@@ -528,14 +551,69 @@ export const register: Register = (on, options) => {
     const isTerminal = e.surface === 'terminal'
     // Each Svg needs a non-empty `alt`: the desktop app draws nothing for an empty one.
     const Svg = !isTerminal && 'Svg' in ui ? ui.Svg : null
-    const cellCount = mode === 'wide' ? 24 : mode === 'medium' ? 16 : 8
 
     const verdict = verdictOf(limits, now)
     const { accent, glyph } = VERDICTS[verdict]
     const label = t.verdicts[verdict]
 
-    return (
-      <Box flexDirection="column" gap={0} alignItems="stretch">
+    const resets = limits
+      .map(l => (l.resetsAt ? `${t.resetNames[l.kind] ?? labelOf(l.kind).toLowerCase()} ${resetShort(l.resetsAt, now)}` : ''))
+      .filter(Boolean)
+      .join(' · ')
+    const forecast = forecastLine(limits, now)
+
+    // The model of the last request, or the selected one before any request; its effort
+    // once a request has said it. « Opus 5.5 · effort high », or « Opus 5.5 · high » for short.
+    const inUse = await read($, inUseAtom)
+    const name = modelName(inUse?.model || model)
+    const effort = inUse?.effort ?? null
+    const modelShort = name ? [name, ...(effort ? [effort] : [])].join(' · ') : ''
+    const modelFull = name ? [name, ...(effort ? [`${t.effort} ${effort}`] : [])].join(' · ') : ''
+
+    // A long prompt leaves the band few rows (maxRows): a taller tree would scroll or be cut.
+    const hasRoom = typeof e.props.maxRows === 'number' && Number.isFinite(e.props.maxRows)
+    const rows = hasRoom ? e.props.maxRows : Infinity
+
+    // One layout of the card: its mode, its bars (cells on the terminal, pixels elsewhere),
+    // and whether the model sits beside the verdict.
+    type Layout = { mode: Mode; cells: number; barWidth: number; withModel: boolean }
+    const longestLabel = Math.max(...limits.map(l => labelOf(l.kind).length))
+    // Stacked bars take what their row leaves: the label, two gaps, the percentage's five
+    // columns, the gap to the delta and its four, the padding and the border.
+    const stackedRoom = hasWidth ? columns - longestLabel - 13 - (showDelta ? 5 : 0) : 8
+    const pxFor = (mode: Mode) => {
+      if (mode === 'wide') return 120
+      if (mode === 'medium') return 84
+      if (!hasWidth) return 150
+      if (mode === 'tiny') return Math.max(40, Math.min(400, stackedRoom * PX_PER_COLUMN))
+      const fit = Math.max(40, Math.min(400, Math.floor((columns - 9 - limits.length * 7) / limits.length) * PX_PER_COLUMN))
+      // From 50 to 69 columns the narrow bars keep at most 65 % of the room they could take.
+      return columns <= 69 && columns >= 50 ? Math.round(fit * 0.65) : fit
+    }
+    // The terminal's bars, longest first: narrow ones shorten before the bars stack.
+    const cellsFor = (mode: Mode) =>
+      mode === 'wide' ? [24] : mode === 'medium' ? [16] : mode === 'narrow' ? [8, 6, 4] : [Math.max(4, Math.min(16, stackedRoom))]
+    const isBesideVerdict = (mode: Mode) => mode === 'wide' || mode === 'medium'
+    const layoutsOf = (modes: readonly Mode[], withModel: boolean): Layout[] =>
+      modes.flatMap(mode => (Svg ? [0] : cellsFor(mode)).map(cells => ({ mode, cells, barWidth: pxFor(mode), withModel })))
+
+    // Beside the verdict the model stays while a layout keeps it on the row; then the
+    // richest layout without it, the model going to a line of its own.
+    const wantsMain = modelPosition === 'main' && modelShort !== ''
+    const richest = MODES.slice(MODES.indexOf(ceiling))
+    const candidates =
+      hasWidth && !isForced
+        ? [...(wantsMain ? layoutsOf(richest.filter(isBesideVerdict), true) : []), ...layoutsOf(richest, false)]
+        : layoutsOf([ceiling], wantsMain && isBesideVerdict(ceiling)).slice(0, 1)
+
+    const cardFor = ({ mode, cells: cellCount, barWidth, withModel }: Layout) => {
+      const isTiny = mode === 'tiny'
+      const isStacked = mode === 'narrow' || isTiny
+      const contentRows = isTiny ? limits.length : 1
+      const hasPadding = bandPadding > 0 && rows >= contentRows + 2 + bandPadding * 2
+      const hasBorder = rows >= contentRows + 2
+
+      return (
         <Box
           gap={isTiny && isTerminal ? 0 : isStacked ? 2 : 3}
           flexDirection={isTiny ? 'column' : 'row'}
@@ -553,6 +631,7 @@ export const register: Register = (on, options) => {
               <Text color={accent} bold>{glyph}</Text>
             )}
             {isStacked ? null : <Text weight="semibold" color={Svg ? undefined : accent}>{label}</Text>}
+            {withModel ? <Text dimColor size="footnote">{modelShort}</Text> : null}
           </Box>}
           {isTiny ? null : <Box flexGrow={1} />}
           {limits.map(l => {
@@ -587,21 +666,96 @@ export const register: Register = (on, options) => {
             )
           })}
         </Box>
+      )
+    }
+
+    // The first layout whose row fits the band, else the most compact.
+    const fitsRow = (l: Layout) => !hasWidth || columnsOf(cardFor(l)) <= columns
+    const chosen = candidates.find(fitsRow) ?? (candidates[candidates.length - 1] as Layout)
+    const card = cardFor(chosen)
+    const contentRows = chosen.mode === 'tiny' ? limits.length : 1
+    if (rows < contentRows) {
+      return next(e)
+    }
+    const modelAt = modelPosition === 'main' ? (chosen.withModel ? 'main' : 'line') : modelPosition
+
+    // Each line takes the richest form that keeps to one row; with none, the shortest, which wraps.
+    // A line wider than the band, less its side padding, wraps and takes more rows.
+    const lineColumns = hasWidth ? Math.max(1, columns - 4) : Infinity
+    const fits = (text: string) => text.length <= lineColumns
+    const rowsOf = (text: string) => Math.max(1, Math.ceil(text.length / lineColumns))
+    const joined = (...parts: string[]) => parts.filter(Boolean).join(' · ')
+
+    // The model heads the reset line; too long, it drops the word « effort », then takes a
+    // line of its own above the resets, where both then fit.
+    const resetText = showReset && resets !== '' ? `${t.resetLine}${resets}` : ''
+    const resetShortForm = [joined(modelShort, resetText)]
+    const resetLines =
+      modelAt === 'reset' && name
+        ? firstFitting([[joined(modelFull, resetText)], resetShortForm, ...(resetText ? [[modelShort, resetText]] : [])], fits, resetShortForm)
+        : resetText ? [resetText] : []
+
+    const [last, total, context] = [await read($, lastTurnAtom), await read($, sessionTokensAtom), await read($, contextAtom)]
+    const tokensLong = showTokens ? tokenParts(last, total, context, false).join(' · ') : ''
+    const tokensShort = showTokens ? tokenParts(last, total, context, true).join(' · ') : ''
+    const leadFull = modelAt === 'tokens' ? modelFull : ''
+    const leadShort = modelAt === 'tokens' ? modelShort : ''
+    // The same at the head of the tokens line, the totals going short before the model splits off.
+    const tokensShortForm = [joined(leadShort, tokensShort)]
+    const tokenLines = firstFitting(
+      [
+        [joined(leadFull, tokensLong)],
+        [joined(leadShort, tokensLong)],
+        tokensShortForm,
+        ...(leadShort && tokensShort ? [[leadShort, tokensShort]] : []),
+      ],
+      fits,
+      tokensShortForm,
+    ).filter(Boolean)
+
+    const modelLong = name ? t.modelLine(name, effort) : ''
+    const modelText = modelAt === 'line' && name ? (fits(modelLong) ? modelLong : modelShort) : ''
+
+    // Drop the extras one by one (model line, tokens line, reset line, forecast), then the
+    // vertical padding and the border, then hide.
+    const fullCard = contentRows + 2 + bandPadding * 2
+    const hasForecastLine = forecast !== '' && rows >= fullCard + rowsOf(forecast)
+    const forecastRows = hasForecastLine ? rowsOf(forecast) : 0
+    const resetRows = resetLines.reduce((sum, line) => sum + rowsOf(line), 0)
+    const hasResetLine = resetLines.length > 0 && rows >= fullCard + forecastRows + resetRows
+    const shownResetRows = hasResetLine ? resetRows : 0
+    const allTokenRows = tokenLines.reduce((sum, line) => sum + rowsOf(line), 0)
+    const hasTokenLine = tokenLines.length > 0 && rows >= fullCard + forecastRows + shownResetRows + allTokenRows
+    const tokenRows = hasTokenLine ? allTokenRows : 0
+    const hasModelLine = modelText !== '' && rows >= fullCard + forecastRows + shownResetRows + tokenRows + rowsOf(modelText)
+
+    return (
+      <Box flexDirection="column" gap={0} alignItems="stretch">
+        {card}
+        {hasModelLine ? (
+          <Box paddingX={2}>
+            <Text dimColor size="footnote">{modelText}</Text>
+          </Box>
+        ) : null}
         {hasForecastLine ? (
           <Box paddingX={2}>
             <Text color={VERDICTS.slow.accent} size="footnote">{forecast}</Text>
           </Box>
         ) : null}
-        {hasResetLine ? (
-          <Box justifyContent="space-between" flexDirection={isStacked ? 'column' : 'row'} paddingX={2}>
-            <Text dimColor size="footnote">{resetLine}</Text>
-          </Box>
-        ) : null}
-        {hasTokenLine ? (
-          <Box paddingX={2}>
-            <Text dimColor size="footnote">{tokens}</Text>
-          </Box>
-        ) : null}
+        {hasResetLine
+          ? resetLines.map((line, i) => (
+              <Box key={`reset-${i}`} paddingX={2}>
+                <Text dimColor size="footnote">{line}</Text>
+              </Box>
+            ))
+          : null}
+        {hasTokenLine
+          ? tokenLines.map((line, i) => (
+              <Box key={`tokens-${i}`} paddingX={2}>
+                <Text dimColor size="footnote">{line}</Text>
+              </Box>
+            ))
+          : null}
       </Box>
     )
   })

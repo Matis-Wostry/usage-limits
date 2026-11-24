@@ -28,7 +28,9 @@ export type Strings = {
   input: string
   output: string
   cached: (read: string, written: string) => string
-  model: (model: string, shown: string) => string
+  model: (model: string, effort: string | null, shown: string) => string
+  modelLine: (model: string, effort: string | null) => string
+  effort: string
   vsTime: (gap: string, glyph: string) => string
   tipUsed: (label: string, percent: string) => string
   tipElapsed: (percent: string) => string
@@ -76,7 +78,9 @@ export const STRINGS: Record<'fr' | 'en', Strings> = {
     input: 'entrée',
     output: 'sortie',
     cached: (read, written) => `dont cache lu ${read}, écrit ${written}`,
-    model: (model, shown) => `Modèle : ${model} (bande : ${shown})`,
+    model: (model, effort, shown) => `Modèle : ${model}${effort ? `, effort ${effort}` : ''} (bande : ${shown})`,
+    modelLine: (model, effort) => `Modèle : ${model}${effort ? ` · Effort : ${effort}` : ''}`,
+    effort: 'effort',
     vsTime: (gap, glyph) => `${gap} pts par rapport au temps, ${glyph}`,
     tipUsed: (label, percent) => `${label} : ${percent} consommé`,
     tipElapsed: percent => `${percent} du temps écoulé (repère noir)`,
@@ -127,7 +131,9 @@ export const STRINGS: Record<'fr' | 'en', Strings> = {
     input: 'input',
     output: 'output',
     cached: (read, written) => `cached read ${read}, written ${written}`,
-    model: (model, shown) => `Model: ${model} (band: ${shown})`,
+    model: (model, effort, shown) => `Model: ${model}${effort ? `, effort ${effort}` : ''} (band: ${shown})`,
+    modelLine: (model, effort) => `Model: ${model}${effort ? ` · Effort: ${effort}` : ''}`,
+    effort: 'effort',
     vsTime: (gap, glyph) => `${gap} pts vs time, ${glyph}`,
     tipUsed: (label, percent) => `${label}: ${percent} used`,
     tipElapsed: percent => `${percent} of the time elapsed (black mark)`,
@@ -170,6 +176,7 @@ export const SETTINGS_FR: Record<string, { label: string; description: string }>
   barHeight: { label: 'Épaisseur des barres (px)', description: 'Épaisseur de chaque barre, en pixels. Le terminal dessine ses barres en texte et l’ignore.' },
   bandPadding: { label: 'Hauteur de la bande (lignes)', description: 'Marge au-dessus et au-dessous du contenu, en lignes. 0 rend la bande la plus basse possible.' },
   showTokens: { label: 'Afficher les tokens', description: 'Écrit sous la bande les tokens du dernier tour, le total de la session et le remplissage du contexte.' },
+  modelPosition: { label: 'Modèle et effort', description: 'Où la bande montre le modèle et l’effort : reset en tête de la ligne des resets, tokens en tête de la ligne des tokens, main à côté du verdict, line sur une ligne à part, off nulle part.' },
   isCompact: { label: 'Style compact', description: 'Retire les barres : seulement le nom de la limite et le pourcentage.' },
   history: { label: 'Panneau d’historique', description: 'Enregistre chaque jour le pic de chaque limite et les tokens, et ouvre le panneau à chaque session.' },
 }

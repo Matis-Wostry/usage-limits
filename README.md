@@ -73,7 +73,7 @@ Puis tape `/reload-plugins` (ou ouvre une nouvelle session) et envoie un message
 
 ### Vérifier la version
 
-`/usage-limits-config` doit lister les réglages `language`, `resetFormat`, `showForecast` et `history` : ils sont arrivés avec la 0.13.0.
+`/usage-limits-config` doit lister le réglage `modelPosition` : il est arrivé avec la 0.14.0.
 
 ## Où ça s'affiche
 
@@ -123,6 +123,18 @@ Avec `history=false`, le panneau se ferme et plus rien n'est enregistré. Ce qui
 
 Sous la bande, une ligne donne les tokens du dernier tour (entrée, sortie), le total de la session (sous-agents compris) et le remplissage du contexte. L'entrée compte aussi la part servie par le cache ; `/limites` détaille cette part. Les totaux commencent avec la session, survivent à un rechargement du mod et repartent à zéro après `/clear` ou `/resume`. La ligne revient avec la réponse suivante.
 
+## Modèle et effort
+
+La bande montre le modèle utilisé et son effort, par exemple « Opus 5.5 · effort high ». Le modèle est celui de la dernière requête, ou celui choisi avec `/model` avant toute requête. L'effort apparaît dès la première requête, et un `/effort` se voit à la requête suivante. Un modèle sans effort, ou un effort laissé en `auto`, n'affiche que son nom. Les requêtes des sous-agents ne comptent pas. `/limites` ajoute l'effort à la ligne « Modèle ».
+
+`modelPosition` choisit où l'afficher :
+
+- `reset` (défaut) : en tête de la ligne des resets, « Opus 5.5 · effort high · Reset : session 1 h 15 · semaine 2 j 1 h », même si `showReset=false`.
+- `tokens` : en tête de la ligne des tokens, même si `showTokens=false`.
+- `main` : à côté du verdict, sur la ligne des barres. Quand les barres s'empilent (bande étroite), il passe sur sa propre ligne.
+- `line` : sur une ligne à part sous la bande, « Modèle : Opus 5.5 · Effort : high ».
+- `off` : nulle part.
+
 ## Fable
 
 Quand Claude Code remonte une limite propre à un modèle (par exemple `seven_day_fable`), sa barre n'apparaît que si ce modèle est sélectionné (`/model`), et remplace alors la barre « 7 j ». Sans limite Fable remontée, la barre « 7 j » reste.
@@ -150,6 +162,7 @@ Trois façons de régler le mod :
 | `showReset` | `true`, `false` | `true` | Ajoute sous la bande la ligne « Reset : session … · semaine … ». |
 | `resetFormat` | `duration`, `clock` | `duration` | Écrit le reset en temps restant ou en heure. |
 | `showTokens` | `true`, `false` | `true` | Ajoute sous la bande la ligne des tokens : dernier tour, session, contexte. |
+| `modelPosition` | `reset`, `tokens`, `main`, `line`, `off` | `reset` | Où afficher le modèle et l'effort : ligne des resets, ligne des tokens, à côté du verdict, ligne à part, ou nulle part. |
 | `barHeight` | 2 à 20 (px) | `6` | Épaisseur des barres. Le terminal dessine ses barres en texte et ignore ce réglage. |
 | `bandPadding` | 0 à 3 (lignes) | `1` | Hauteur de la bande : marge au-dessus et au-dessous de son contenu. `0` la rend la plus basse possible. |
 | `layout` | `auto`, `wide`, `medium`, `narrow` | `auto` | Disposition : `auto` s'adapte à la largeur, les autres en imposent une (large, moyenne, étroite). |
@@ -166,6 +179,9 @@ Trois façons de régler le mod :
 /usage-limits-config warnAt=80
 /usage-limits-config resetFormat=clock
 /usage-limits-config history=true
+/usage-limits-config modelPosition=main
 ```
 
-Quand un long prompt laisse peu de place, la bande retire d'elle-même, dans l'ordre, la ligne des tokens, la ligne des resets, la prévision, la marge puis la bordure, quels que soient ces réglages.
+Quand la largeur manque, la bande se resserre d'elle-même au lieu de déborder : les barres raccourcissent, puis s'empilent ; avec `modelPosition=main`, le modèle reste à côté du verdict tant qu'il tient, puis passe sur sa propre ligne. Chaque ligne prend sa forme la plus complète qui tient : « xhigh » au lieu de « effort xhigh », les tokens en flèches (`Tour ↓12 k ↑850`), puis le modèle passe au-dessus des resets ou des tokens. `layout` impose une disposition, sans ce resserrement.
+
+Quand un long prompt laisse peu de place, la bande retire d'elle-même, dans l'ordre, la ligne du modèle, la ligne des tokens, la ligne des resets, la prévision, la marge puis la bordure, quels que soient ces réglages.

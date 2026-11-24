@@ -4,7 +4,7 @@ import type { TestBody } from 'claude-code/testing'
 const BAND = {
   plugin: 'usage-limits',
   component: 'AbovePrompt',
-  props: { hasSurvey: false, isWorking: false, maxRows: 20, bodyColumns: 120, scroll: { offset: 0, bodyRows: 20 }, view: {} },
+  props: { hasSurvey: false, isCollapsed: false, isWorking: false, maxRows: 20, bodyColumns: 120, scroll: { offset: 0, bodyRows: 20 }, view: {} },
 } as const
 
 const LIMITS = [
@@ -46,6 +46,9 @@ const engine = (on: Parameters<TestBody>[1], model: string, limits: typeof LIMIT
   on('session.end', () => ({ sessionId: 'session' }))
   on('session.measure', (_, e) => ({ changed: e.changed }))
   on('turn.complete', (_, e) => ({ text: e.answer, usage: e.usage }))
+  on('turn.step', async function* (_, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage: null }
+  })
   on('ui.status', () => ({ value: undefined }))
   on('ui.invalidate', () => ({ value: undefined }))
   on('ui.toast', (_, e) => {
@@ -175,9 +178,9 @@ test('the time left follows the clock without a new reply', async ($, on) => {
   await $.session.start(START)
 
   const ui = await $.ui.mount(band('desktop'))
-  expect((await ui.find({ type: 'Text', text: /^Reset/ }))?.text).toBe('Reset : session 1 h 15 · semaine 2 j 1 h')
+  expect((await ui.find({ type: 'Text', text: /Reset/ }))?.text).toBe('Opus 5.5 · Reset : session 1 h 15 · semaine 2 j 1 h')
   await clock.advance(40 * 60_000)
-  expect((await ui.find({ type: 'Text', text: /^Reset/ }))?.text).toBe('Reset : session 35 min · semaine 2 j 0 h')
+  expect((await ui.find({ type: 'Text', text: /Reset/ }))?.text).toBe('Opus 5.5 · Reset : session 35 min · semaine 2 j 0 h')
   await ui.unmount()
 })
 
@@ -190,7 +193,7 @@ test('a window past its reset starts over at zero', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: 'Limite proche' })).toBeFalsy()
   expect(await ui.find({ type: 'Text', text: /^95 %$/ })).toBeFalsy()
   expect(await ui.find({ type: 'Text', text: /^0 %$/ })).toBeTruthy()
-  expect((await ui.find({ type: 'Text', text: /^Reset/ }))?.text).toBe('Reset : semaine 1 j 22 h')
+  expect((await ui.find({ type: 'Text', text: /Reset/ }))?.text).toBe('Opus 5.5 · Reset : semaine 1 j 22 h')
   await ui.unmount()
 
   // The engine fills in the rest of the input.
@@ -268,14 +271,15 @@ test('the tiny layout stacks its bars with no blank row in the terminal', async 
 test('a line that wraps counts for its rows', async ($, on) => {
   engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
   await $.session.start(START)
-  const resetLine = /^Reset/
+  const resetLine = /Reset/
 
-  // The reset line is 40 cells in a band of 36: two rows, above a card of five.
-  const short = await $.ui.mount(band('terminal', 40, 6))
+  // At 40 columns the bars stack: a card of six rows. The reset line, model first, is 51 cells
+  // in a band of 36, and the reset alone does not fit either: two rows.
+  const short = await $.ui.mount(band('terminal', 40, 7))
   expect(await short.find({ type: 'Text', text: resetLine })).toBeFalsy()
   await short.unmount()
 
-  const tall = await $.ui.mount(band('terminal', 40, 7))
+  const tall = await $.ui.mount(band('terminal', 40, 8))
   expect(await tall.find({ type: 'Text', text: resetLine })).toBeTruthy()
   await tall.unmount()
 })
@@ -346,11 +350,11 @@ test('when rows run short, the forecast stays before the reset line', async ($, 
 
   const six = await $.ui.mount(band('terminal', 120, 6))
   expect(await six.find({ type: 'Text', text: /rythme/ })).toBeTruthy()
-  expect(await six.find({ type: 'Text', text: /^Reset/ })).toBeFalsy()
+  expect(await six.find({ type: 'Text', text: /Reset/ })).toBeFalsy()
   await six.unmount()
 
   const seven = await $.ui.mount(band('terminal', 120, 7))
-  expect(await seven.find({ type: 'Text', text: /^Reset/ })).toBeTruthy()
+  expect(await seven.find({ type: 'Text', text: /Reset/ })).toBeTruthy()
   await seven.unmount()
 })
 
@@ -368,7 +372,7 @@ test('resetFormat clock writes the time of the reset', { options: { resetFormat:
   await $.session.start(START)
 
   const ui = await $.ui.mount(band('desktop'))
-  expect((await ui.find({ type: 'Text', text: /^Reset/ }))?.text).toBe('Reset : session à 18 h 40 · semaine sam. à 21 h 05')
+  expect((await ui.find({ type: 'Text', text: /Reset/ }))?.text).toBe('Opus 5.5 · Reset : session à 18 h 40 · semaine sam. à 21 h 05')
   const [five] = (await ui.findAll({ type: 'Svg' })).filter(s => /consommé/.test(String(s.props.source)))
   expect(String(five?.props.source)).toContain('reset à 18 h 40')
   await ui.unmount()
@@ -382,7 +386,7 @@ test('resetFormat clock, in English', { options: { resetFormat: 'clock', languag
   await $.session.start(START)
 
   const ui = await $.ui.mount(band('desktop'))
-  expect((await ui.find({ type: 'Text', text: /^Reset/ }))?.text).toBe('Reset: session at 18:40 · week Sat at 21:05')
+  expect((await ui.find({ type: 'Text', text: /Reset/ }))?.text).toBe('Opus 5.5 · Reset: session at 18:40 · week Sat at 21:05')
   await ui.unmount()
 })
 
@@ -410,7 +414,7 @@ test('in English, the band is English', { options: { language: 'en' } }, async (
   expect(await ui.find({ type: 'Text', text: /^7 d$/ })).toBeTruthy()
   expect(await ui.find({ type: 'Text', text: /^90%$/ })).toBeTruthy()
   expect((await ui.find({ type: 'Text', text: /pace/ }))?.text).toBe('At this pace: 5 h limit in 25 min')
-  expect((await ui.find({ type: 'Text', text: /^Reset/ }))?.text).toBe('Reset: session 1 h 15 · week 2 d 1 h')
+  expect((await ui.find({ type: 'Text', text: /Reset/ }))?.text).toBe('Opus 5.5 · Reset: session 1 h 15 · week 2 d 1 h')
   expect((await ui.find({ type: 'Text', text: /Last turn/ }))?.text).toBe('Last turn: input 400, output 1.2 k · Session: input 400, output 1.2 k · Context: 110 k / 1 M (11%)')
   const [five] = (await ui.findAll({ type: 'Svg' })).filter(s => /used/.test(String(s.props.source)))
   expect(String(five?.props.source)).toContain('<title>5 h: 90% used · 75% of the time elapsed (black mark) · resets in 1 h 15')
@@ -670,4 +674,391 @@ test('the tooltip of a bar reads with a space after its label', async ($, on) =>
   const [five] = (await ui.findAll({ type: 'Svg' })).filter(s => /consommé/.test(String(s.props.source)))
   expect(String(five?.props.source)).toContain('<title>5 h : 50 % consommé')
   await ui.unmount()
+})
+
+// ---- Model and effort ----
+
+// One model request of the main loop (or of a subagent, with `agentId`), read to its end.
+const step = async ($: Parameters<TestBody>[0], model: string, effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max', agentId?: string) => {
+  const stream = $.turn.step({ turnId: 't', index: 0, messageCount: 1, model, ...(effort ? { effort } : {}), ...(agentId ? { agentId } : {}) })
+  for await (const _ of stream) {
+    // Nothing streams from the stub.
+  }
+  return stream.result
+}
+
+test('by default, the reset line starts with the model and the effort of the last request', async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+  await step($, 'claude-opus-5-5', 'high')
+  await $.turn.complete(turn('t1', USAGE(400, 1200)))
+
+  const ui = await $.ui.mount(band('desktop'))
+  expect((await ui.find({ type: 'Text', text: /Reset/ }))?.text).toBe('Opus 5.5 · effort high · Reset : session 1 h 15 · semaine 2 j 1 h')
+  expect((await ui.find({ type: 'Text', text: /Dernier tour/ }))?.text).toMatch(/^Dernier tour/)
+  expect(await ui.find({ type: 'Text', text: 'Opus 5.5 · high' })).toBeFalsy()
+  await ui.unmount()
+})
+
+test('on the desktop too, a reset line too long shortens, then splits', async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+  await step($, 'claude-opus-5-5', 'high')
+
+  const short = await $.ui.mount(band('desktop', 64))
+  expect((await short.find({ type: 'Text', text: /Reset/ }))?.text).toBe('Opus 5.5 · high · Reset : session 1 h 15 · semaine 2 j 1 h')
+  await short.unmount()
+
+  const split = await $.ui.mount(band('desktop', 60))
+  expect((await split.find({ type: 'Text', text: /Reset/ }))?.text).toBe('Reset : session 1 h 15 · semaine 2 j 1 h')
+  expect(await split.find({ type: 'Text', text: 'Opus 5.5 · high' })).toBeTruthy()
+  await split.unmount()
+})
+
+test('showReset off keeps the model on the reset line', { options: { showReset: false } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+  await step($, 'claude-opus-5-5', 'high')
+
+  const ui = await $.ui.mount(band('desktop'))
+  expect((await ui.find({ type: 'Text', text: /Opus/ }))?.text).toBe('Opus 5.5 · effort high')
+  expect(await ui.find({ type: 'Text', text: /Reset/ })).toBeFalsy()
+  await ui.unmount()
+})
+
+test('modelPosition tokens puts the model at the head of the tokens line', { options: { modelPosition: 'tokens' } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5')
+  await $.session.start(START)
+  await step($, 'claude-opus-5-5', 'high')
+  await $.turn.complete(turn('t1', USAGE(400, 1200)))
+
+  const ui = await $.ui.mount(band('desktop', 200))
+  expect((await ui.find({ type: 'Text', text: /Dernier tour/ }))?.text).toBe('Opus 5.5 · effort high · Dernier tour : entrée 400, sortie 1,2 k · Session : entrée 400, sortie 1,2 k · Contexte : 110 k / 1 M (11 %)')
+  await ui.unmount()
+})
+
+test('before any request, the band shows the selected model without an effort', async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+
+  const ui = await $.ui.mount(band('desktop'))
+  expect((await ui.find({ type: 'Text', text: /Reset/ }))?.text).toBe('Opus 5.5 · Reset : session 1 h 15 · semaine 2 j 1 h')
+  await ui.unmount()
+})
+
+test('an /effort change shows from the next request', async ($, on) => {
+  engine(on, 'claude-opus-5-5')
+  await $.session.start(START)
+  await step($, 'claude-opus-5-5', 'high')
+  await step($, 'claude-opus-5-5', 'max')
+
+  const ui = await $.ui.mount(band('desktop'))
+  expect((await ui.find({ type: 'Text', text: /Reset/ }))?.text).toMatch(/^Opus 5\.5 · effort max · Reset/)
+  await ui.unmount()
+})
+
+test('a subagent’s request leaves the main model and effort alone', async ($, on) => {
+  engine(on, 'claude-opus-5-5')
+  await $.session.start(START)
+  await step($, 'claude-opus-5-5', 'high')
+  await step($, 'claude-haiku-4-5-20251001', 'low', 'agent-1')
+
+  const ui = await $.ui.mount(band('desktop'))
+  expect((await ui.find({ type: 'Text', text: /Reset/ }))?.text).toMatch(/^Opus 5\.5 · effort high · Reset/)
+  await ui.unmount()
+})
+
+test('a model with no effort shows its name alone', async ($, on) => {
+  engine(on, 'claude-haiku-4-5-20251001')
+  await $.session.start(START)
+  await step($, 'claude-haiku-4-5-20251001')
+
+  const ui = await $.ui.mount(band('desktop'))
+  expect((await ui.find({ type: 'Text', text: /Reset/ }))?.text).toMatch(/^Haiku 4\.5 · Reset/)
+  await ui.unmount()
+})
+
+test('model names read like /model writes them', { options: { modelPosition: 'line' } }, async ($, on) => {
+  const cases: [string, string][] = [
+    ['claude-opus-5-5', 'Opus 5.5'],
+    ['claude-opus-5-5[1m]', 'Opus 5.5 (1M)'],
+    ['claude-haiku-4-5-20251001', 'Haiku 4.5'],
+    ['claude-sonnet-4-20250514', 'Sonnet 4'],
+    ['my-custom-model', 'my-custom-model'],
+  ]
+  engine(on, 'claude-opus-5-5')
+  await $.session.start(START)
+
+  for (const [id, name] of cases) {
+    await step($, id)
+    const ui = await $.ui.mount(band('desktop'))
+    expect((await ui.find({ type: 'Text', text: /^Modèle/ }))?.text).toBe(`Modèle : ${name}`)
+    await ui.unmount()
+  }
+})
+
+test('a tokens line too long goes short, then the model takes a line above it', { options: { modelPosition: 'tokens' } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+  await step($, 'claude-opus-5-5', 'high')
+  await $.turn.complete(turn('t1', USAGE(400, 1200)))
+
+  const short = await $.ui.mount(band('desktop', 72))
+  expect((await short.find({ type: 'Text', text: /Ctx/ }))?.text).toBe('Opus 5.5 · high · Tour ↓400 ↑1,2 k · Session ↓400 ↑1,2 k · Ctx 11 %')
+  await short.unmount()
+
+  const split = await $.ui.mount(band('desktop', 60))
+  expect((await split.find({ type: 'Text', text: /Ctx/ }))?.text).toBe('Tour ↓400 ↑1,2 k · Session ↓400 ↑1,2 k · Ctx 11 %')
+  expect(await split.find({ type: 'Text', text: 'Opus 5.5 · high' })).toBeTruthy()
+  await split.unmount()
+})
+
+test('showTokens off keeps the model on the tokens line', { options: { showTokens: false, modelPosition: 'tokens' } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5')
+  await $.session.start(START)
+  await step($, 'claude-opus-5-5', 'high')
+  await $.turn.complete(turn('t1', USAGE(400, 1200)))
+
+  const ui = await $.ui.mount(band('desktop'))
+  expect((await ui.find({ type: 'Text', text: /Opus/ }))?.text).toBe('Opus 5.5 · effort high')
+  expect(await ui.find({ type: 'Text', text: /Dernier tour|Session/ })).toBeFalsy()
+  await ui.unmount()
+})
+
+test('modelPosition main puts the model beside the verdict', { options: { modelPosition: 'main' } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+  await step($, 'claude-opus-5-5', 'high')
+  await $.turn.complete(turn('t1', USAGE(400, 1200)))
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount(band(surface))
+    expect(await ui.find({ type: 'Text', text: 'Opus 5.5 · high' })).toBeTruthy()
+    expect((await ui.find({ type: 'Text', text: /Dernier tour/ }))?.text).toMatch(/^Dernier tour/)
+    await ui.unmount()
+  }
+})
+
+test('modelPosition main falls back to its own line when the bars are stacked', { options: { modelPosition: 'main' } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+  await step($, 'claude-opus-5-5', 'high')
+
+  const ui = await $.ui.mount(band('desktop', 50))
+  expect(await ui.find({ type: 'Text', text: 'Opus 5.5 · high' })).toBeFalsy()
+  expect(await ui.find({ type: 'Text', text: 'Modèle : Opus 5.5 · Effort : high' })).toBeTruthy()
+  await ui.unmount()
+})
+
+test('modelPosition line gives the model a line of its own', { options: { modelPosition: 'line' } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+  await step($, 'claude-opus-5-5', 'high')
+  await $.turn.complete(turn('t1', USAGE(400, 1200)))
+
+  const ui = await $.ui.mount(band('desktop'))
+  expect(await ui.find({ type: 'Text', text: 'Modèle : Opus 5.5 · Effort : high' })).toBeTruthy()
+  expect((await ui.find({ type: 'Text', text: /Dernier tour/ }))?.text).toMatch(/^Dernier tour/)
+  await ui.unmount()
+})
+
+test('when rows run short, the model line goes first', { options: { modelPosition: 'line' } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+  await step($, 'claude-opus-5-5', 'high')
+  await $.turn.complete(turn('t1', USAGE(400, 1200)))
+
+  // A card of five rows, the reset line and the tokens line: the model line needs an eighth.
+  const seven = await $.ui.mount(band('desktop', 120, 7))
+  expect(await seven.find({ type: 'Text', text: /^Modèle/ })).toBeFalsy()
+  expect(await seven.find({ type: 'Text', text: /Dernier tour/ })).toBeTruthy()
+  await seven.unmount()
+
+  const eight = await $.ui.mount(band('desktop', 120, 8))
+  expect(await eight.find({ type: 'Text', text: /^Modèle/ })).toBeTruthy()
+  await eight.unmount()
+})
+
+test('modelPosition off shows no model', { options: { modelPosition: 'off' } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+  await step($, 'claude-opus-5-5', 'high')
+  await $.turn.complete(turn('t1', USAGE(400, 1200)))
+
+  for (const columns of [120, 50]) {
+    const ui = await $.ui.mount(band('desktop', columns))
+    expect(await ui.find({ type: 'Text', text: /Opus|Modèle/ })).toBeFalsy()
+    await ui.unmount()
+  }
+})
+
+test('the model line speaks English', { options: { modelPosition: 'line', language: 'en' } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+  await step($, 'claude-opus-5-5', 'high')
+
+  const ui = await $.ui.mount(band('desktop'))
+  expect(await ui.find({ type: 'Text', text: 'Model: Opus 5.5 · Effort: high' })).toBeTruthy()
+  await ui.unmount()
+})
+
+test('/limites names the effort beside the model', async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+  await step($, 'claude-opus-5-5', 'high')
+
+  const detail = await $.command.run({ command: 'limites' } as Parameters<typeof $.command.run>[0])
+  expect(detail.text).toContain('Modèle : claude-opus-5-5, effort high (bande : 5 h, 7 j)')
+})
+
+// Each position at every surface, width and height: the band always draws.
+const drawsEverywhere: TestBody = async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(90, 20), AT_2245)
+  await $.session.start(START)
+  await step($, 'claude-opus-5-5[1m]', 'xhigh')
+  await $.turn.complete(turn('t1', USAGE(1500, 300)))
+  for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
+    for (const columns of [1, 20, 33, 50, 70, 100, 200]) {
+      for (const maxRows of [1, 3, 6, 20]) {
+        const ui = await $.ui.mount({ ...BAND, surface, props: { ...BAND.props, bodyColumns: columns, maxRows } })
+        expect(await ui.drawn()).toBeTruthy()
+        await ui.unmount()
+      }
+    }
+  }
+}
+test('modelPosition main draws everywhere', { options: { modelPosition: 'main' } }, drawsEverywhere)
+test('modelPosition line draws everywhere', { options: { modelPosition: 'line' } }, drawsEverywhere)
+test('modelPosition tokens draws everywhere', { options: { modelPosition: 'tokens' } }, drawsEverywhere)
+test('modelPosition reset draws everywhere', drawsEverywhere)
+test('modelPosition reset draws everywhere without the reset line', { options: { showReset: false } }, drawsEverywhere)
+
+// ---- Responsive ----
+
+// The terminal's own count, kept apart from the module's: a character a cell, a row's gaps,
+// its padding and border; a column as wide as its widest child, a Box no narrower than minWidth.
+type Drawn = { type: string; props?: Record<string, unknown>; children?: (Drawn | string)[] }
+const cellsOf = (node: Drawn | string): number => {
+  if (typeof node === 'string') return [...node].length
+  const children = node.children ?? []
+  if (node.type === 'Text') return children.reduce((sum: number, c) => sum + cellsOf(c), 0)
+  const p = node.props ?? {}
+  const frame = 2 * Number(p.paddingX ?? 0) + (p.borderStyle ? 2 : 0)
+  const widths = children.map(cellsOf)
+  const inner =
+    p.flexDirection === 'column'
+      ? Math.max(0, ...widths)
+      : widths.reduce((sum, w) => sum + w, 0) + Number(p.gap ?? 0) * Math.max(0, children.length - 1)
+  return Math.max(Number(p.minWidth ?? 0), inner + frame)
+}
+
+// The band's rows as drawn: the card first, then each line under it.
+const bandRows = async (ui: { drawn: () => Promise<unknown> }) => {
+  const root = (await ui.drawn()) as Drawn
+  const column = root.children?.[0] as Drawn
+  return (column.children ?? []) as Drawn[]
+}
+
+const barCells = async (ui: { findAll: (q: { type: 'Text'; text: RegExp }) => Promise<{ text?: string }[]> }) =>
+  (await ui.findAll({ type: 'Text', text: /^[━╌┃]{2,}$/ }))[0]?.text?.length
+
+// Three limits, a long model name, an effort and big totals: the most a band holds.
+const fitsTheTerminal: TestBody = async ($, on) => {
+  engine(on, 'claude-opus-5-5', [...limitsAt(90, 20), { kind: 'spend_limit', percentUsed: 40 }], AT_2245)
+  await $.session.start(START)
+  await step($, 'claude-opus-5-5[1m]', 'xhigh')
+  await $.turn.complete(turn('t1', USAGE(123_456, 45_678)))
+
+  for (const columns of [27, 30, 33, 40, 50, 60, 69, 70, 80, 90, 99, 100, 110, 120, 140, 200]) {
+    const ui = await $.ui.mount(band('terminal', columns))
+    const [card, ...lines] = await bandRows(ui)
+    expect(`${columns}: ${cellsOf(card as Drawn) <= columns}`).toBe(`${columns}: true`)
+    // From 70 columns each line keeps to one row.
+    if (columns >= 70) {
+      for (const line of lines) expect(`${columns}: ${cellsOf(line) <= columns}`).toBe(`${columns}: true`)
+    }
+    await ui.unmount()
+  }
+}
+test('the band never runs past the terminal, model on the reset line', fitsTheTerminal)
+test('the band never runs past the terminal, model beside the verdict', { options: { modelPosition: 'main' } }, fitsTheTerminal)
+test('the band never runs past the terminal, model on its own line', { options: { modelPosition: 'line' } }, fitsTheTerminal)
+test('the band never runs past the terminal, model on the tokens line', { options: { modelPosition: 'tokens' } }, fitsTheTerminal)
+
+test('beside the verdict, the bars shorten before the model leaves the row', { options: { modelPosition: 'main' } }, async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+  await step($, 'claude-opus-5-5', 'xhigh')
+
+  const wide = await $.ui.mount(band('terminal', 120))
+  expect(await barCells(wide)).toBe(24)
+  expect(await wide.find({ type: 'Text', text: 'Opus 5.5 · xhigh' })).toBeTruthy()
+  await wide.unmount()
+
+  const shorter = await $.ui.mount(band('terminal', 100))
+  expect(await barCells(shorter)).toBe(16)
+  expect(await shorter.find({ type: 'Text', text: 'Opus 5.5 · xhigh' })).toBeTruthy()
+  await shorter.unmount()
+
+  const own = await $.ui.mount(band('terminal', 80))
+  expect(await barCells(own)).toBe(16)
+  expect(await own.find({ type: 'Text', text: 'Opus 5.5 · xhigh' })).toBeFalsy()
+  expect(await own.find({ type: 'Text', text: 'Modèle : Opus 5.5 · Effort : xhigh' })).toBeTruthy()
+  await own.unmount()
+})
+
+test('a reset line too long drops the word effort, then puts the model above it', async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+  await step($, 'claude-opus-5-5', 'xhigh')
+  const texts = async (columns: number) => {
+    const ui = await $.ui.mount(band('terminal', columns))
+    const found = (await ui.findAll({ type: 'Text', text: /Reset|^Opus/ })).map(f => f.text)
+    await ui.unmount()
+    return found
+  }
+
+  expect(await texts(120)).toEqual(['Opus 5.5 · effort xhigh · Reset : session 1 h 15 · semaine 2 j 1 h'])
+  expect(await texts(69)).toEqual(['Opus 5.5 · xhigh · Reset : session 1 h 15 · semaine 2 j 1 h'])
+  expect(await texts(50)).toEqual(['Opus 5.5 · xhigh', 'Reset : session 1 h 15 · semaine 2 j 1 h'])
+  // Too narrow for the reset alone: one line that wraps, rather than two.
+  expect(await texts(40)).toEqual(['Opus 5.5 · xhigh · Reset : session 1 h 15 · semaine 2 j 1 h'])
+})
+
+test('the tokens line keeps its long form while it fits', async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+  await $.turn.complete(turn('t1', USAGE(400, 1200)))
+
+  const wide = await $.ui.mount(band('terminal', 120))
+  expect((await wide.find({ type: 'Text', text: /Contexte|Ctx/ }))?.text).toBe('Dernier tour : entrée 400, sortie 1,2 k · Session : entrée 400, sortie 1,2 k · Contexte : 110 k / 1 M (11 %)')
+  await wide.unmount()
+
+  const narrower = await $.ui.mount(band('terminal', 100))
+  expect((await narrower.find({ type: 'Text', text: /Contexte|Ctx/ }))?.text).toBe('Tour ↓400 ↑1,2 k · Session ↓400 ↑1,2 k · Ctx 11 %')
+  await narrower.unmount()
+})
+
+test('in the terminal, narrow bars shorten before they stack', async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+
+  const row = await $.ui.mount(band('terminal', 45))
+  expect((await bandRows(row))[0]?.props?.flexDirection).toBe('row')
+  expect(await barCells(row)).toBe(6)
+  await row.unmount()
+})
+
+test('stacked bars fill the terminal band', async ($, on) => {
+  engine(on, 'claude-opus-5-5', limitsAt(50, 20), AT_2245)
+  await $.session.start(START)
+
+  const forty = await $.ui.mount(band('terminal', 40))
+  expect((await bandRows(forty))[0]?.props?.flexDirection).toBe('column')
+  expect(await barCells(forty)).toBe(16)
+  await forty.unmount()
+
+  const small = await $.ui.mount(band('terminal', 24))
+  expect(await barCells(small)).toBe(8)
+  await small.unmount()
 })

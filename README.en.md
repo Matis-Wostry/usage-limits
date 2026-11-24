@@ -79,7 +79,7 @@ Then type `/reload-plugins` (or open a new session) and send Claude a message: t
 
 ### Checking the version
 
-`/usage-limits-config` should list the `language`, `resetFormat`, `showForecast` and `history` settings: they came with 0.13.0.
+`/usage-limits-config` should list the `modelPosition` setting: it came with 0.14.0.
 
 ## Where it shows
 
@@ -127,6 +127,18 @@ With `history=false`, the pane closes and nothing more is recorded. What was alr
 
 Under the band, a line gives the last turn's tokens (input, output), the session's total (subagents included) and the context fill. The input also counts what the cache served; `/limits` details that part. The totals start with the session, survive a reload of the mod and go back to zero after `/clear` or `/resume`. The line comes back with the next reply.
 
+## Model and effort
+
+The band shows the model in use and its effort, for example "Opus 5.5 · effort high". The model is the last request's, or the one picked with `/model` before any request. The effort shows from the first request, and an `/effort` shows from the next one. A model without effort, or an effort left on `auto`, shows its name alone. Subagents' requests do not count. `/limits` adds the effort to its "Model" line.
+
+`modelPosition` picks where it shows:
+
+- `reset` (default): at the head of the reset line, "Opus 5.5 · effort high · Reset: session 1 h 15 · week 2 d 1 h", even with `showReset=false`.
+- `tokens`: at the head of the tokens line, even with `showTokens=false`.
+- `main`: beside the verdict, on the bars' row. When the bars stack (a narrow band), it moves to a line of its own.
+- `line`: on a line of its own under the band, "Model: Opus 5.5 · Effort: high".
+- `off`: nowhere.
+
 ## Fable
 
 When Claude Code reports a limit of its own for a model (for example `seven_day_fable`), its bar only shows while that model is selected (`/model`), and then replaces the "7 d" bar. With no Fable limit reported, the "7 d" bar stays.
@@ -154,6 +166,7 @@ Three ways to set the mod up:
 | `showReset` | `true`, `false` | `true` | Adds under the band the line "Reset: session … · week …". |
 | `resetFormat` | `duration`, `clock` | `duration` | Writes the reset as the time left or as the time. |
 | `showTokens` | `true`, `false` | `true` | Adds under the band the tokens line: last turn, session, context. |
+| `modelPosition` | `reset`, `tokens`, `main`, `line`, `off` | `reset` | Where the model and effort show: reset line, tokens line, beside the verdict, a line of their own, or nowhere. |
 | `barHeight` | 2 to 20 (px) | `6` | Thickness of the bars. The terminal draws its bars in text and ignores this. |
 | `bandPadding` | 0 to 3 (rows) | `1` | Height of the band: the margin above and below its content. `0` makes it as low as it gets. |
 | `layout` | `auto`, `wide`, `medium`, `narrow` | `auto` | Layout: `auto` adapts to the width, the others force one. |
@@ -170,6 +183,9 @@ Three ways to set the mod up:
 /usage-limits-config warnAt=80
 /usage-limits-config resetFormat=clock
 /usage-limits-config history=true
+/usage-limits-config modelPosition=main
 ```
 
-When a long prompt leaves little room, the band removes by itself, in order, the tokens line, the reset line, the forecast, the margin and then the border, whatever these settings say.
+When width runs short, the band tightens by itself instead of running over: the bars shorten, then stack; with `modelPosition=main`, the model stays beside the verdict while it fits, then moves to a line of its own. Each line takes its fullest form that fits: "xhigh" instead of "effort xhigh", the tokens as arrows (`Turn ↓12 k ↑850`), then the model moves above the resets or the tokens. `layout` forces a layout, without this tightening.
+
+When a long prompt leaves little room, the band removes by itself, in order, the model line, the tokens line, the reset line, the forecast, the margin and then the border, whatever these settings say.
